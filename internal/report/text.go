@@ -1,0 +1,434 @@
+// Package report provides output generation for RDS analysis results.
+// It supports multiple output formats including text (terminal) and HTML.
+package report
+
+import (
+	"fmt"
+	"io"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/openshift-kni/rds-analyzer/internal/parser"
+	"github.com/openshift-kni/rds-analyzer/internal/rules"
+	"github.com/openshift-kni/rds-analyzer/internal/types"
+)
+
+// TextGenerator produces text-based output suitable for terminal display.
+// It includes ANSI color codes for enhanced readability.
+type TextGenerator struct {
+	ruleEngine *rules.Engine
+	writer     io.Writer
+}
+
+// NewTextGenerator creates a new text report generator.
+func NewTextGenerator(ruleEngine *rules.Engine) *TextGenerator {
+	return &TextGenerator{
+		ruleEngine: ruleEngine,
+	}
+}
+
+// Generate writes the complete analysis report to the given writer.
+func (g *TextGenerator) Generate(w io.Writer, report types.ValidationReport) error {
+	g.writer = w
+
+	// Show target version if set.
+	if targetVersion := g.ruleEngine.GetTargetVersion(); !targetVersion.IsZero() {
+		fmt.Fprintf(w, "Analyzing for OCP version: %s\n\n", targetVersion)
+	}
+
+	g.printSummary(report.Summary)
+	g.printMissingCRs(report.Summary.ValidationIssues)
+	g.printDiffs(report.Diffs)
+
+	return nil
+}
+
+// printSummary outputs the high-level validation statistics.
+func (g *TextGenerator) printSummary(summary types.Summary) {
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintln(g.writer, "               VALIDATION SUMMARY")
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintf(g.writer, "Total Missing CRs: %d\n", summary.NumMissing)
+	fmt.Fprintf(g.writer, "CRs with Differences: %d\n", summary.NumDiffCRs)
+	fmt.Fprintf(g.writer, "Total CRs Scanned: %d\n", summary.TotalCRs)
+	fmt.Fprintf(g.writer, "Unmatched CRs: %d\n", len(summary.UnmatchedCRS))
+	fmt.Fprintln(g.writer)
+}
+
+// printMissingCRs outputs the missing CRs section with impact evaluation.
+func (g *TextGenerator) printMissingCRs(issues types.ValidationIssues) {
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintln(g.writer, "             MISSING CUSTOM RESOURCES")
+	fmt.Fprintln(g.writer, "==================================================")
+
+	if len(issues) == 0 {
+		fmt.Fprintln(g.writer, "No missing CRs found.")
+		fmt.Fprintln(g.writer)
+		return
+	}
+
+	// Pre-evaluate all missing CRs.
+	missingCRResults := g.ruleEngine.EvaluateMissingCRs(issues)
+
+	// Track impact statistics.
+	missingStats := map[string]int{
+		"Impacting":    0,
+		"NotImpacting": 0,
+		"NeedsReview":  0,
+	}
+
+	// Sort groups for consistent output.
+	groupKeys := make([]string, 0, len(issues))
+	for k := range issues {
+		groupKeys = append(groupKeys, k)
+	}
+	sort.Strings(groupKeys)
+
+	for _, groupName := range groupKeys {
+		fmt.Fprintf(g.writer, "Group: %s\n", groupName)
+		deviations := issues[groupName]
+
+		// Sort deviations within group.
+		deviationKeys := make([]string, 0, len(deviations))
+		for k := range deviations {
+			deviationKeys = append(deviationKeys, k)
+		}
+		sort.Strings(deviationKeys)
+
+		for _, deviationName := range deviationKeys {
+			deviation := deviations[deviationName]
+			fmt.Fprintf(g.writer, "  - %s: %s\n", deviationName, deviation.Msg)
+
+			for _, cr := range deviation.CRs {
+				result := missingCRResults[cr]
+				missingStats[result.Impact]++
+
+				impactSymbol := getImpactSymbol(result.Impact)
+				fmt.Fprintf(g.writer, "    %s %s\n", impactSymbol, cr)
+			}
+		}
+		fmt.Fprintln(g.writer)
+	}
+
+	// Print impact summary.
+	fmt.Fprintln(g.writer, "--------------------------------------------------")
+	fmt.Fprintln(g.writer, "Missing CRs Impact Summary:")
+	fmt.Fprintf(g.writer, "  Impacting:     %d\n", missingStats["Impacting"])
+	fmt.Fprintf(g.writer, "  Not Impacting: %d\n", missingStats["NotImpacting"])
+	fmt.Fprintf(g.writer, "  Needs Review:  %d\n", missingStats["NeedsReview"])
+	fmt.Fprintln(g.writer)
+}
+
+// printDiffs outputs the configuration differences section.
+func (g *TextGenerator) printDiffs(diffs []types.Diff) {
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintln(g.writer, "              DETECTED DIFFERENCES")
+	fmt.Fprintln(g.writer, "==================================================")
+
+	if len(diffs) == 0 {
+		fmt.Fprintln(g.writer, "No differences detected.")
+		return
+	}
+
+	// Filter empty diffs.
+	diffs = parser.RemoveEmptyDiffs(diffs)
+
+	// Track impact statistics.
+	impactStats := map[string]int{
+		"Impacting":     0,
+		"NotImpacting":  0,
+		"NotADeviation": 0,
+		"NeedsReview":   0,
+	}
+
+	// Collect diffs for count rule evaluation.
+	var allDiffChecks []types.DiffCheck
+
+	for i, d := range diffs {
+		fmt.Fprintf(g.writer, "--- Diff %d of %d ---\n", i+1, len(diffs))
+		fmt.Fprintf(g.writer, "CR Name: %s\n", d.CRName)
+		fmt.Fprintf(g.writer, "Template: %s\n", d.CorrelatedTemplate)
+		fmt.Fprintf(g.writer, "Description: %s\n", d.Description)
+		fmt.Fprintln(g.writer, "---")
+
+		formattedDiff, err := parser.ParseExpectedAndFound(d.DiffOutput, d.CRName, filepath.Base(d.CorrelatedTemplate))
+		if err != nil {
+			fmt.Fprintf(g.writer, "Error parsing diff: %v\n", err)
+			fmt.Fprintln(g.writer, d.DiffOutput)
+		} else {
+			allDiffChecks = append(allDiffChecks, formattedDiff)
+
+			ruleResult := g.ruleEngine.Evaluate(formattedDiff)
+			finalImpact := g.printDiffCheck(formattedDiff, ruleResult)
+			impactStats[finalImpact]++
+		}
+		fmt.Fprintln(g.writer)
+	}
+
+	// Evaluate and print count rule violations.
+	countResults := g.ruleEngine.EvaluateCountRules(allDiffChecks)
+	if len(countResults) > 0 {
+		g.printCountRuleResults(countResults, impactStats)
+	}
+
+	// Print summary statistics.
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintln(g.writer, "              IMPACT SUMMARY")
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintf(g.writer, "Impacting:      %d\n", impactStats["Impacting"])
+	fmt.Fprintf(g.writer, "Not Impacting:  %d\n", impactStats["NotImpacting"])
+	fmt.Fprintf(g.writer, "Not a Deviation: %d\n", impactStats["NotADeviation"])
+	fmt.Fprintf(g.writer, "Needs Review:   %d\n", impactStats["NeedsReview"])
+	fmt.Fprintln(g.writer)
+}
+
+// printCountRuleResults outputs count rule violations.
+func (g *TextGenerator) printCountRuleResults(results []rules.CountRuleResult, impactStats map[string]int) {
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintln(g.writer, "              COUNT RULE VIOLATIONS")
+	fmt.Fprintln(g.writer, "==================================================")
+
+	for _, result := range results {
+		impactColor := getImpactColor(result.Impact)
+		impactSymbol := getImpactSymbol(result.Impact)
+
+		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+		fmt.Fprintf(g.writer, "Rule: %s\n", result.RuleID)
+		fmt.Fprintf(g.writer, "Description: %s\n", result.Description)
+		fmt.Fprintf(g.writer, "Count: %d CRs matched\n", result.Count)
+		fmt.Fprintf(g.writer, "Impact: %s%s %s%s\n", impactColor, impactSymbol, result.Impact, parser.ColorReset)
+		fmt.Fprintf(g.writer, "Comment: %s\n", result.Comment)
+
+		if len(result.MatchedCRs) > 0 {
+			fmt.Fprintln(g.writer, "Matched CRs:")
+			for _, cr := range result.MatchedCRs {
+				fmt.Fprintf(g.writer, "  - %s\n", cr)
+			}
+		}
+		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+		fmt.Fprintln(g.writer)
+
+		impactStats[result.Impact]++
+	}
+}
+
+// printDiffCheck outputs a single diff with rule evaluation and returns the final impact.
+func (g *TextGenerator) printDiffCheck(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) string {
+	hasNeedsReview := false
+
+	hasNeedsReview = g.printExpectedNotFoundLines(diffCheck, ruleResult) || hasNeedsReview
+	hasNeedsReview = g.printFoundNotExpectedLines(diffCheck, ruleResult) || hasNeedsReview
+	hasNeedsReview = g.printValueDifferences(diffCheck, ruleResult) || hasNeedsReview
+
+	finalImpact := determineImpact(ruleResult, hasNeedsReview)
+	fmt.Fprintln(g.writer)
+	g.printOverallRuleResult(ruleResult, hasNeedsReview)
+
+	return finalImpact
+}
+
+// printExpectedNotFoundLines outputs lines that were expected but not found.
+func (g *TextGenerator) printExpectedNotFoundLines(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
+	if len(diffCheck.ExpectedNotFound) == 0 {
+		return false
+	}
+
+	hasNeedsReview := false
+	fmt.Fprintln(g.writer, "expected but not found:")
+	for _, line := range diffCheck.ExpectedNotFound {
+		ruleIDs := g.getMatchingRuleIDs(line, "ExpectedNotFound", ruleResult)
+		if len(ruleIDs) == 0 {
+			hasNeedsReview = true
+		}
+		fmt.Fprint(g.writer, parser.ColorGreen+line+parser.ColorReset)
+		g.printRuleIDsSuffix(ruleIDs)
+	}
+	return hasNeedsReview
+}
+
+// printFoundNotExpectedLines outputs lines that were found but not expected.
+func (g *TextGenerator) printFoundNotExpectedLines(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
+	if len(diffCheck.FoundNotExpected) == 0 {
+		return false
+	}
+
+	hasNeedsReview := false
+	fmt.Fprintln(g.writer, "found but not expected:")
+	for _, line := range diffCheck.FoundNotExpected {
+		ruleIDs := g.getMatchingRuleIDs(line, "FoundNotExpected", ruleResult)
+		if len(ruleIDs) == 0 {
+			hasNeedsReview = true
+		}
+		fmt.Fprint(g.writer, parser.ColorRed+line+parser.ColorReset)
+		g.printRuleIDsSuffix(ruleIDs)
+	}
+	return hasNeedsReview
+}
+
+// printValueDifferences outputs value differences between expected and found.
+func (g *TextGenerator) printValueDifferences(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
+	if len(diffCheck.ExpectedValue) == 0 || len(diffCheck.FoundValue) == 0 {
+		return false
+	}
+
+	if len(diffCheck.ExpectedWithContext) > 0 {
+		return g.printContextualValueDifferences(diffCheck, ruleResult)
+	}
+	return g.printPlainValueDifferences(diffCheck, ruleResult)
+}
+
+// printContextualValueDifferences outputs value differences with surrounding context.
+func (g *TextGenerator) printContextualValueDifferences(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
+	fmt.Fprintln(g.writer, "expected:")
+	g.printContextualDiffViewColored(diffCheck.ExpectedWithContext, parser.ColorGreen)
+
+	fmt.Fprintln(g.writer, "found:")
+	g.printContextualDiffViewColored(diffCheck.FoundWithContext, parser.ColorRed)
+
+	for _, line := range diffCheck.FoundValue {
+		ruleIDs := g.getMatchingRuleIDs(line, "ExpectedFound", ruleResult)
+		if len(ruleIDs) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// printPlainValueDifferences outputs value differences without context.
+func (g *TextGenerator) printPlainValueDifferences(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
+	hasNeedsReview := false
+
+	fmt.Fprintln(g.writer, "expected:")
+	for _, line := range diffCheck.ExpectedValue {
+		fmt.Fprintln(g.writer, parser.ColorGreen+line+parser.ColorReset)
+	}
+
+	fmt.Fprintln(g.writer, "found:")
+	for _, line := range diffCheck.FoundValue {
+		ruleIDs := g.getMatchingRuleIDs(line, "ExpectedFound", ruleResult)
+		if len(ruleIDs) == 0 {
+			hasNeedsReview = true
+		}
+		fmt.Fprint(g.writer, parser.ColorRed+line+parser.ColorReset)
+		g.printRuleIDsSuffix(ruleIDs)
+	}
+	return hasNeedsReview
+}
+
+// printContextualDiffViewColored outputs diff lines with context in dim color
+// and changed lines in the specified color.
+func (g *TextGenerator) printContextualDiffViewColored(diffLines []types.DiffLine, changedColor string) {
+	for _, dl := range diffLines {
+		if dl.IsChanged {
+			fmt.Fprintln(g.writer, changedColor+dl.Content+parser.ColorReset)
+		} else {
+			fmt.Fprintln(g.writer, parser.ColorDim+dl.Content+parser.ColorReset)
+		}
+	}
+}
+
+// determineImpact calculates the final impact considering unmatched lines.
+func determineImpact(ruleResult rules.EvaluationResult, hasNeedsReview bool) string {
+	if !ruleResult.Matched {
+		return "NeedsReview"
+	}
+	if hasNeedsReview && ruleResult.Impact != "Impacting" {
+		return "NeedsReview"
+	}
+	return ruleResult.Impact
+}
+
+// getMatchingRuleIDs returns rule IDs that matched a specific line.
+func (g *TextGenerator) getMatchingRuleIDs(line, diffType string, ruleResult rules.EvaluationResult) []string {
+	trimmedLine := strings.TrimSpace(line)
+	var ruleIDs []string
+	seen := make(map[string]bool)
+
+	for _, condResult := range ruleResult.Conditions {
+		if condResult.ConditionType == diffType && condResult.Matched {
+			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
+			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
+				if !seen[condResult.RuleID] {
+					seen[condResult.RuleID] = true
+					ruleIDs = append(ruleIDs, condResult.RuleID)
+				}
+			}
+		}
+	}
+	return ruleIDs
+}
+
+// printRuleIDsSuffix outputs the rule IDs that matched a line.
+func (g *TextGenerator) printRuleIDsSuffix(ruleIDs []string) {
+	if len(ruleIDs) > 0 {
+		fmt.Fprintf(g.writer, "  \u26A0\uFE0F  Matched by rule: [%s]\n", strings.Join(ruleIDs, ", "))
+	} else {
+		fmt.Fprintln(g.writer)
+	}
+}
+
+// printOverallRuleResult outputs the overall evaluation result.
+func (g *TextGenerator) printOverallRuleResult(ruleResult rules.EvaluationResult, hasNeedsReview bool) {
+	fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+
+	if !ruleResult.Matched {
+		fmt.Fprintf(g.writer, "%s OVERALL IMPACT: %sNeedsReview%s%s\n", parser.ColorBold, parser.ColorCyan, parser.ColorReset, parser.ColorBold+parser.ColorReset)
+		fmt.Fprintln(g.writer)
+		fmt.Fprintln(g.writer, "Rules:")
+		fmt.Fprintf(g.writer, "  - None: \u26AA %s\n", ruleResult.Comment)
+		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+		return
+	}
+
+	finalImpact := ruleResult.Impact
+	if hasNeedsReview && finalImpact != "Impacting" {
+		finalImpact = "NeedsReview"
+	}
+
+	impactColor := getImpactColor(finalImpact)
+	fmt.Fprintf(g.writer, "%s OVERALL IMPACT: %s%s%s%s\n", parser.ColorBold, impactColor, finalImpact, parser.ColorReset, parser.ColorBold+parser.ColorReset)
+	fmt.Fprintln(g.writer)
+	fmt.Fprintln(g.writer, "Rules:")
+
+	for _, condResult := range ruleResult.Conditions {
+		if condResult.Matched {
+			condImpactSymbol := getImpactSymbol(condResult.Impact)
+			fmt.Fprintf(g.writer, "  - %s: %s %s\n", condResult.RuleID, condImpactSymbol, condResult.Comment)
+		}
+	}
+
+	if hasNeedsReview {
+		fmt.Fprintf(g.writer, "  - \U0001F535 Some diffs from this deviation need to be reviewed by the telco team\n")
+	}
+
+	fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+}
+
+// getImpactSymbol returns an emoji symbol for the impact level.
+func getImpactSymbol(impact string) string {
+	switch impact {
+	case "Impacting":
+		return "\U0001F534" // Red circle
+	case "NotImpacting":
+		return "\U0001F7E1" // Yellow circle
+	case "NotADeviation":
+		return "\U0001F7E2" // Green circle
+	default:
+		return "\u26AA" // White circle
+	}
+}
+
+// getImpactColor returns the ANSI color code for the impact level.
+func getImpactColor(impact string) string {
+	switch impact {
+	case "Impacting":
+		return parser.ColorRed + parser.ColorBold
+	case "NotImpacting":
+		return parser.ColorYellow
+	case "NotADeviation":
+		return parser.ColorGreen
+	default:
+		return parser.ColorCyan
+	}
+}

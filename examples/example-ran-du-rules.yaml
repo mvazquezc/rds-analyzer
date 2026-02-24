@@ -1,0 +1,148 @@
+#
+# Example validation rules for RDS RAN DU Profile originally contributed by Ben Niven-Jenkins.
+#
+version: "1.0"
+description: "Example validation rules for RDS RAN DU Profile"
+
+# Global settings
+settings:
+  # Default impact for rules that do not match any condition, one of Impacting, NotImpacting, NeedsReview, NotADeviation
+  default_impact: "NeedsReview"
+  default_severity: "MEDIUM"
+
+# Labels/annotations matching rules use their specified impact,
+# everything else gets the default_impact (NotADeviation).
+label_annotation_rules:
+  # Label rules - each rule requires key, description, and impact
+  # key and value support glob patterns (e.g., "bad-prefix/*")
+  # value is optional - if omitted, matches any value
+  labels:
+    - key: "openshift.io/cluster-monitoring"
+      value: "true"
+      description: "Cluster monitoring label is not aligned with RDS"
+      impact:
+        4.20: Impacting
+
+  # Annotation rules - same format as labels
+  annotations: []
+
+  # Impact for labels/annotations NOT matching any rule
+  default_impact: "NotADeviation"
+  default_comment: "These labels and annotations are acceptable"
+
+# Count rules - check the number of occurrences of specific templateFileName + crName patterns
+count_rules:
+  - id: "EX-RAN-C-001-single-catalogsource"
+    description: "Only one CatalogSource should be configured."
+    match:
+      templateFileName: "DefaultCatsrc.yaml"
+      crName: "operators.coreos.com/v1alpha1_CatalogSource_openshift-marketplace_*"
+
+    limits:
+      - condition: "count > 1"
+        impact:
+          4.20: Impacting
+        comment: "Only a single CatalogSource is supported. Found {count} CatalogSource CRs using this template."
+
+      - condition: "count == 0"
+        impact:
+          4.20: Impacting
+        comment: "No CatalogSource configured. A CatalogSource is required to install operators."
+
+# Global rules - apply to all diffs regardless of CR or template
+global_rules:
+
+  - id: "EX-RAN-G-001-sysctls"
+    description: "Detect sysctl diffs"
+    match: {}
+
+    conditions:
+      - type: "Any"
+        regex: 'net\..*\..*'
+        impact:
+          4.20: NotImpacting
+        comment: "Sysctls beginning with net.* are network namespaced. Use of unsafe sysctls may consume platform resources beyond the configured pod limits. The partner/customer is responsible for evaluating this impact."
+        supporting_doc: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/scalability_and_performance/telco-ran-du-ref-design-specs#telco-ran-sysctls_telco-ran-du
+
+      - type: "Any"
+        contains: "kernel.unknown_nmi_panic"
+        impact:
+          4.20: Impacting
+        comment: "The system is designed to avoid NMI. However if one occurs recovery will likely be quick. A panic forces 5+ minutes of outage."
+
+rules:
+
+  - id: "EX-RAN-R-001-catalogsource"
+    description: "CatalogSource configuration validation."
+    match:
+      templateFileName: "DefaultCatsrc.yaml"
+      crName: "operators.coreos.com/v1alpha1_CatalogSource_openshift-marketplace_*"
+
+    conditions:
+      - type: "ExpectedNotFound"
+        contains: "target.workload.openshift.io/management"
+        impact:
+          4.20: Impacting
+        comment: "Missing workload management annotation for proper scheduling with workload partitioning."
+
+      - type: "ExpectedNotFound"
+        contains: "displayName: null"
+        impact:
+          4.20: NotADeviation
+        comment: "DisplayName is optional and informational."
+
+      - type: "ExpectedNotFound"
+        contains: "publisher: Red Hat"
+        impact:
+          4.20: NotADeviation
+        comment: "Publisher field is optional and informational."
+
+      - type: "ExpectedFound"
+        contains: "publisher:"
+        impact:
+          4.20: NotADeviation
+        comment: "Publisher field is informational."
+
+  - id: "EX-RAN-R-002-olm-pprof"
+    description: "OLM profiling configuration validation."
+    match:
+      templateFileName: "DisableOLMPprof.yaml"
+      crName: "v1_ConfigMap_openshift-operator-lifecycle-manager_collect-profiles-config"
+
+    conditions:
+      - type: "ExpectedFound"
+        contains: "disabled: False"
+        impact:
+          4.20: Impacting
+        comment: "OLM profiling should be disabled to reduce resource consumption."
+
+  - id: "EX-RAN-R-003-kdump-memory"
+    description: "Kdump Memory Configuration"
+    match:
+      templateFileName: "06-kdump-*.yaml"
+      crName: "machineconfiguration.openshift.io/v1_MachineConfig_06-kdump-enable-*"
+
+    conditions:
+      - type: "ExpectedFound"
+        regex: '.*crashkernel=(?:[1-9]\d?|[1-5]\d\d|6[0-6]\d|67[0-5])M$'
+        impact:
+          4.20: Impacting
+        comment: "Crashkernel memory must be set to 676M or higher."
+
+      - type: "ExpectedFound"
+        regex: '.*crashkernel=(?:[1-9]\d*G|676M|67[6-9]M|6[8-9]\dM|[7-9]\d\dM|\d{4,}M)$'
+        impact:
+          4.20: NotImpacting
+        comment: "Crashkernel memory must be set to 676M or higher. The configured value is above the minimum threshold."
+
+  - id: "EX-RAN-R-004-namespace-workload-labels"
+    description: "Infrastructure namespace workload management label validation"
+    match:
+      # templateFileName is not used for this rule since it applies to all namespaces
+      crName: "v1_Namespace_openshift-*"
+    conditions:
+      - type: "ExpectedNotFound"
+        contains: "workload.openshift.io/allowed: management"
+        impact:
+          4.20: Impacting
+        comment: "Namespace is missing the workload.openshift.io/allowed: management label. This label is required for proper pod placement on platform (reserved)cores."

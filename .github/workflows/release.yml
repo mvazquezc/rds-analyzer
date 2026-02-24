@@ -1,0 +1,96 @@
+name: RDS Analyzer release
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Download dependencies
+        run: make deps
+
+      - name: Build binaries for all platforms
+        run: make build-all
+
+      - name: Generate checksums
+        run: |
+          cd build
+          sha256sum rds-analyzer-* > checksums.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: build/
+
+  build-container-image:
+    name: Build and Push Container Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Login to Quay.io
+        run: podman login -u "${{ secrets.QUAY_USERNAME }}" -p "${{ secrets.QUAY_PASSWORD }}" quay.io
+
+      - name: Build multi-arch image
+        run: make image-build-multiarch IMAGE_NAME=quay.io/rhsysdeseng/rds-analyzer IMAGE_TAG=${{ steps.version.outputs.VERSION }}
+
+      - name: Push versioned image
+        run: make image-push IMAGE_NAME=quay.io/rhsysdeseng/rds-analyzer IMAGE_TAG=${{ steps.version.outputs.VERSION }}
+
+      - name: Push latest tag
+        run: podman manifest push quay.io/rhsysdeseng/rds-analyzer:${{ steps.version.outputs.VERSION }} docker://quay.io/rhsysdeseng/rds-analyzer:latest
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-binaries, build-container-image]
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: build/
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ steps.version.outputs.VERSION }} \
+            --title "Release ${{ steps.version.outputs.VERSION }}" \
+            --generate-notes \
+            build/rds-analyzer-* \
+            build/checksums.txt
