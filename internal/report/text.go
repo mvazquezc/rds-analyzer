@@ -293,9 +293,9 @@ func (g *TextGenerator) printValueDifferences(diffCheck types.DiffCheck, ruleRes
 func (g *TextGenerator) printContextualValueDifferences(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
 	hasNeedsReview := false
 
-	// Combine ExpectedValue and ExpectedNotFound for the expected section.
-	expectedTargets := append([]string{}, diffCheck.ExpectedValue...)
-	expectedTargets = append(expectedTargets, diffCheck.ExpectedNotFound...)
+	// Only ExpectedNotFound needs rule checks - ExpectedValue is just reference context
+	// (consistent with printPlainValueDifferences which doesn't check rules for ExpectedValue)
+	expectedTargets := diffCheck.ExpectedNotFound
 
 	fmt.Fprintln(g.writer, "expected:")
 	if needsReview := g.printContextualDiffViewWithRules(diffCheck.ExpectedWithContext, expectedTargets, parser.ColorGreen, ruleResult); needsReview {
