@@ -1956,3 +1956,127 @@ func TestLabelAnnotationIndentationHandling(t *testing.T) {
 		})
 	}
 }
+
+// TestLabelAnnotationWithContextLines verifies that labels/annotations are correctly
+// identified when the section header (labels:/annotations:) is a context line, not a changed line.
+func TestLabelAnnotationWithContextLines(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		diffCheck        types.DiffCheck
+		wantMatchedTexts []string
+		description      string
+	}{
+		{
+			name: "label header is context, value is changed",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: []types.DiffLine{
+					{Content: "  labels:", IsChanged: false},                        // context
+					{Content: "    config.nokia.com/reboot: required", IsChanged: true}, // changed
+					{Content: "    existing-label: value", IsChanged: false},        // context
+				},
+				FoundNotExpected: []string{
+					"    config.nokia.com/reboot: required",
+				},
+			},
+			wantMatchedTexts: []string{
+				"config.nokia.com/reboot: required",
+			},
+			description: "Should match label even when labels: is a context line",
+		},
+		{
+			name: "annotation header is context, value is changed",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: []types.DiffLine{
+					{Content: "metadata:", IsChanged: false},
+					{Content: "  annotations:", IsChanged: false},                           // context
+					{Content: "    openshift.io/node-selector: \"\"", IsChanged: true},      // changed
+					{Content: "    workload.openshift.io/allowed: management", IsChanged: false},
+				},
+				FoundNotExpected: []string{
+					"    openshift.io/node-selector: \"\"",
+				},
+			},
+			wantMatchedTexts: []string{
+				"openshift.io/node-selector: \"\"",
+			},
+			description: "Should match annotation even when annotations: is a context line",
+		},
+		{
+			name: "mixed: some labels changed, some context",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: []types.DiffLine{
+					{Content: "  annotations:", IsChanged: false},
+					{Content: "    new-annotation: value1", IsChanged: true},
+					{Content: "    existing-annotation: value2", IsChanged: false},
+					{Content: "  labels:", IsChanged: false},
+					{Content: "    new-label: value3", IsChanged: true},
+				},
+				FoundNotExpected: []string{
+					"    new-annotation: value1",
+					"    new-label: value3",
+				},
+			},
+			wantMatchedTexts: []string{
+				"new-annotation: value1",
+				"new-label: value3",
+			},
+			description: "Should match only changed lines in both sections",
+		},
+		{
+			name: "no context available - falls back to plain evaluation",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: nil, // No context
+				FoundNotExpected: []string{
+					"  labels:",
+					"    app: myapp",
+				},
+			},
+			wantMatchedTexts: []string{
+				"labels:",
+				"app: myapp",
+			},
+			description: "Should fall back to plain evaluation when no context",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := engine.Evaluate(tt.diffCheck)
+
+			// Collect matched texts from label-annotation-rules.
+			matchedTexts := make(map[string]bool)
+			for _, cond := range result.Conditions {
+				if cond.RuleID == "label-annotation-rules" && cond.Matched {
+					matchedTexts[cond.MatchedText] = true
+				}
+			}
+
+			if len(matchedTexts) != len(tt.wantMatchedTexts) {
+				t.Errorf("%s: got %d matches, want %d.\nGot: %v\nWant: %v",
+					tt.description, len(matchedTexts), len(tt.wantMatchedTexts), matchedTexts, tt.wantMatchedTexts)
+				return
+			}
+
+			for _, want := range tt.wantMatchedTexts {
+				if !matchedTexts[want] {
+					t.Errorf("%s: expected match %q not found in results: %v",
+						tt.description, want, matchedTexts)
+				}
+			}
+		})
+	}
+}

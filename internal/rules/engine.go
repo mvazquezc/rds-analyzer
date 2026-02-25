@@ -144,10 +144,30 @@ func (e *Engine) evaluateLabelsAndAnnotations(diffCheck types.DiffCheck) Evaluat
 		Conditions: []ConditionResult{},
 	}
 
-	result.Conditions = append(result.Conditions,
-		e.extractAndEvaluateLabelAnnotations(diffCheck.FoundNotExpected, "FoundNotExpected")...)
-	result.Conditions = append(result.Conditions,
-		e.extractAndEvaluateLabelAnnotations(diffCheck.ExpectedNotFound, "ExpectedNotFound")...)
+	// Use context-aware evaluation if available (includes section headers like labels:/annotations:).
+	// Pass the target lines (FoundNotExpected/ExpectedNotFound) to filter which lines to actually match.
+	// Fall back to plain lines if context is not available.
+	if len(diffCheck.FoundWithContext) > 0 {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotationsWithContext(
+				diffCheck.FoundWithContext,
+				diffCheck.FoundNotExpected,
+				"FoundNotExpected")...)
+	} else {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotations(diffCheck.FoundNotExpected, "FoundNotExpected")...)
+	}
+
+	if len(diffCheck.ExpectedWithContext) > 0 {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotationsWithContext(
+				diffCheck.ExpectedWithContext,
+				diffCheck.ExpectedNotFound,
+				"ExpectedNotFound")...)
+	} else {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotations(diffCheck.ExpectedNotFound, "ExpectedNotFound")...)
+	}
 
 	result.Matched = e.hasAnyMatchedCondition(result.Conditions)
 
@@ -160,6 +180,55 @@ func (e *Engine) evaluateLabelsAndAnnotations(diffCheck types.DiffCheck) Evaluat
 	}
 
 	return result
+}
+
+// extractAndEvaluateLabelAnnotationsWithContext processes lines with context to find and evaluate labels/annotations.
+// It uses context lines to track section headers (labels:/annotations:) but only creates matches for lines
+// that are both changed AND present in targetLines.
+func (e *Engine) extractAndEvaluateLabelAnnotationsWithContext(contextLines []types.DiffLine, targetLines []string, conditionType string) []ConditionResult {
+	var results []ConditionResult
+	var currentType string
+	var sectionIndent int = -1
+
+	// Build a set of target line contents for fast lookup.
+	targetSet := make(map[string]bool)
+	for _, line := range targetLines {
+		targetSet[strings.TrimSpace(line)] = true
+	}
+
+	defaultImpact, defaultComment := e.getLabelAnnotationDefaults()
+
+	for _, diffLine := range contextLines {
+		line := diffLine.Content
+		trimmed := strings.TrimSpace(line)
+		lineIndent := getIndentLevel(line)
+
+		// Check for section headers in ALL lines (context and changed).
+		if sectionType := e.detectSectionHeader(trimmed); sectionType != "" {
+			currentType = sectionType
+			sectionIndent = lineIndent
+			// Only create a result for section headers that are in targetLines.
+			if targetSet[trimmed] {
+				results = append(results, e.createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
+			}
+			continue
+		}
+
+		// Check if we should exit the section based on indentation.
+		if currentType != "" && lineIndent <= sectionIndent && trimmed != "" {
+			currentType = ""
+			sectionIndent = -1
+		}
+
+		// Only evaluate lines that are inside a labels/annotations section AND in targetLines.
+		if currentType != "" && trimmed != "" && targetSet[trimmed] {
+			if condResult := e.evaluateLabelAnnotationLine(trimmed, currentType, conditionType); condResult != nil {
+				results = append(results, *condResult)
+			}
+		}
+	}
+
+	return results
 }
 
 // hasAnyMatchedCondition checks if any condition in the slice matched.
