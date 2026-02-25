@@ -250,12 +250,24 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 	var diffDataList []DiffData
 	var allDiffChecks []types.DiffCheck
 
-	diffs = parser.RemoveEmptyDiffs(diffs)
+	// Count non-empty diffs for display numbering.
+	nonEmptyDiffs := parser.RemoveEmptyDiffs(diffs)
+	diffIndex := 0
 
-	for i, d := range diffs {
+	for _, d := range diffs {
+		// Handle empty diffs - add minimal DiffCheck for count rules only.
+		if d.DiffOutput == "" {
+			allDiffChecks = append(allDiffChecks, types.DiffCheck{
+				CRName:           d.CRName,
+				TemplateFileName: filepath.Base(d.CorrelatedTemplate),
+			})
+			continue
+		}
+
+		diffIndex++
 		diffData := DiffData{
-			Index:       i + 1,
-			Total:       len(diffs),
+			Index:       diffIndex,
+			Total:       len(nonEmptyDiffs),
 			CRName:      d.CRName,
 			Template:    d.CorrelatedTemplate,
 			Description: d.Description,

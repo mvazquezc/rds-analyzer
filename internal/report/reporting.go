@@ -231,11 +231,19 @@ func (g *ReportingGenerator) calculateStats(
 //   - filtered results (excluding NotADeviation) for display
 //   - all DiffChecks (including NotADeviation) for count rule evaluation
 func (g *ReportingGenerator) evaluateAllDiffs(diffs []types.Diff) ([]reportingDiffResult, []types.DiffCheck) {
-	diffs = parser.RemoveEmptyDiffs(diffs)
 	results := make([]reportingDiffResult, 0, len(diffs))
 	allDiffChecks := make([]types.DiffCheck, 0, len(diffs))
 
 	for _, d := range diffs {
+		// Handle empty diffs - add minimal DiffCheck for count rules only.
+		if d.DiffOutput == "" {
+			allDiffChecks = append(allDiffChecks, types.DiffCheck{
+				CRName:           d.CRName,
+				TemplateFileName: filepath.Base(d.CorrelatedTemplate),
+			})
+			continue
+		}
+
 		diffCheck, err := parser.ParseExpectedAndFound(d.DiffOutput, d.CRName, filepath.Base(d.CorrelatedTemplate))
 		if err != nil {
 			continue

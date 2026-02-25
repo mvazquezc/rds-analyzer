@@ -131,9 +131,6 @@ func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 		return
 	}
 
-	// Filter empty diffs.
-	diffs = parser.RemoveEmptyDiffs(diffs)
-
 	// Track impact statistics.
 	impactStats := map[string]int{
 		"Impacting":     0,
@@ -145,8 +142,22 @@ func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 	// Collect diffs for count rule evaluation.
 	var allDiffChecks []types.DiffCheck
 
-	for i, d := range diffs {
-		fmt.Fprintf(g.writer, "--- Diff %d of %d ---\n", i+1, len(diffs))
+	// Count non-empty diffs for display numbering.
+	nonEmptyDiffs := parser.RemoveEmptyDiffs(diffs)
+	diffIndex := 0
+
+	for _, d := range diffs {
+		// Handle empty diffs - add minimal DiffCheck for count rules only.
+		if d.DiffOutput == "" {
+			allDiffChecks = append(allDiffChecks, types.DiffCheck{
+				CRName:           d.CRName,
+				TemplateFileName: filepath.Base(d.CorrelatedTemplate),
+			})
+			continue
+		}
+
+		diffIndex++
+		fmt.Fprintf(g.writer, "--- Diff %d of %d ---\n", diffIndex, len(nonEmptyDiffs))
 		fmt.Fprintf(g.writer, "CR Name: %s\n", d.CRName)
 		fmt.Fprintf(g.writer, "Template: %s\n", d.CorrelatedTemplate)
 		fmt.Fprintf(g.writer, "Description: %s\n", d.Description)
