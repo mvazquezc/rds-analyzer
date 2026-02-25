@@ -935,6 +935,137 @@ func TestEvaluateLabelOrAnnotation(t *testing.T) {
 	}
 }
 
+// TestLabelAnnotationRegexMatching tests regex-based value matching for labels and annotations.
+func TestLabelAnnotationRegexMatching(t *testing.T) {
+	// Create a rules file with regex-based annotation rules
+	rulesYAML := `
+version: "1.0"
+description: "Test Rules with Regex"
+
+settings:
+  default_impact: "NeedsReview"
+  default_severity: "MEDIUM"
+
+label_annotation_rules:
+  labels: []
+  annotations:
+    # Invalid values (below 10m)
+    - key: "operatorframework.io/bundle-unpack-min-retry-interval"
+      value_regex: "^[1-9]m$"
+      description: "Bundle unpack retry interval must be 10m or higher"
+      impact: "Impacting"
+
+    # Valid values (10m or higher)
+    - key: "operatorframework.io/bundle-unpack-min-retry-interval"
+      value_regex: "^([1-9][0-9]+m|[1-9][0-9]*h)$"
+      description: "Bundle unpack retry interval is correctly set"
+      impact: "NotADeviation"
+
+  default_impact: "NotADeviation"
+  default_comment: "Labels and annotations are acceptable"
+
+global_rules: []
+rules: []
+count_rules: []
+`
+	tmpDir := t.TempDir()
+	rulesPath := filepath.Join(tmpDir, "rules.yaml")
+	if err := os.WriteFile(rulesPath, []byte(rulesYAML), 0644); err != nil {
+		t.Fatalf("Failed to write rules file: %v", err)
+	}
+
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		key         string
+		value       string
+		laType      string
+		wantImpact  string
+		wantComment string
+	}{
+		{
+			name:        "1m is invalid (below 10m)",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "1m",
+			laType:      "annotation",
+			wantImpact:  "Impacting",
+			wantComment: "Bundle unpack retry interval must be 10m or higher",
+		},
+		{
+			name:        "5m is invalid (below 10m)",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "5m",
+			laType:      "annotation",
+			wantImpact:  "Impacting",
+			wantComment: "Bundle unpack retry interval must be 10m or higher",
+		},
+		{
+			name:        "9m is invalid (below 10m)",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "9m",
+			laType:      "annotation",
+			wantImpact:  "Impacting",
+			wantComment: "Bundle unpack retry interval must be 10m or higher",
+		},
+		{
+			name:        "10m is valid",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "10m",
+			laType:      "annotation",
+			wantImpact:  "NotADeviation",
+			wantComment: "Bundle unpack retry interval is correctly set",
+		},
+		{
+			name:        "15m is valid",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "15m",
+			laType:      "annotation",
+			wantImpact:  "NotADeviation",
+			wantComment: "Bundle unpack retry interval is correctly set",
+		},
+		{
+			name:        "60m is valid",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "60m",
+			laType:      "annotation",
+			wantImpact:  "NotADeviation",
+			wantComment: "Bundle unpack retry interval is correctly set",
+		},
+		{
+			name:        "1h is valid",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "1h",
+			laType:      "annotation",
+			wantImpact:  "NotADeviation",
+			wantComment: "Bundle unpack retry interval is correctly set",
+		},
+		{
+			name:        "2h is valid",
+			key:         "operatorframework.io/bundle-unpack-min-retry-interval",
+			value:       "2h",
+			laType:      "annotation",
+			wantImpact:  "NotADeviation",
+			wantComment: "Bundle unpack retry interval is correctly set",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := engine.EvaluateLabelOrAnnotation(tt.key, tt.value, tt.laType)
+			if result.Impact != tt.wantImpact {
+				t.Errorf("Impact = %q, want %q", result.Impact, tt.wantImpact)
+			}
+			if result.Comment != tt.wantComment {
+				t.Errorf("Comment = %q, want %q", result.Comment, tt.wantComment)
+			}
+		})
+	}
+}
+
 // TestIsWorse tests impact priority comparison.
 func TestIsWorse(t *testing.T) {
 	rulesPath := createTestRulesFile(t)
@@ -1845,6 +1976,369 @@ func TestVersionedImpact_GetHighestDefinedVersion(t *testing.T) {
 			} else {
 				if result.String() != tt.wantStr {
 					t.Errorf("got %s, want %s", result.String(), tt.wantStr)
+				}
+			}
+		})
+	}
+}
+
+// TestLabelAnnotationIndentationHandling verifies that non-label/annotation fields
+// at the same indentation level as labels:/annotations: are not incorrectly matched.
+func TestLabelAnnotationIndentationHandling(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		lines            []string
+		wantMatchedTexts []string
+		description      string
+	}{
+		{
+			name: "annotations followed by spec field at same indent",
+			lines: []string{
+				"  annotations:",
+				"    oauth-apiserver.openshift.io/secure-token-storage: \"true\"",
+				"  audit:",
+				"    profile: Default",
+			},
+			wantMatchedTexts: []string{
+				"annotations:",
+				"oauth-apiserver.openshift.io/secure-token-storage: \"true\"",
+			},
+			description: "audit: and profile: should NOT be matched as annotations",
+		},
+		{
+			name: "labels followed by spec field at same indent",
+			lines: []string{
+				"  labels:",
+				"    app: myapp",
+				"  spec:",
+				"    replicas: 3",
+			},
+			wantMatchedTexts: []string{
+				"labels:",
+				"app: myapp",
+			},
+			description: "spec: and replicas: should NOT be matched as labels",
+		},
+		{
+			name: "nested annotations with deeper content",
+			lines: []string{
+				"metadata:",
+				"  annotations:",
+				"    key1: value1",
+				"    key2: value2",
+				"  name: test",
+			},
+			wantMatchedTexts: []string{
+				"annotations:",
+				"key1: value1",
+				"key2: value2",
+			},
+			description: "name: at same level as annotations: should NOT be matched",
+		},
+		{
+			name: "no labels or annotations",
+			lines: []string{
+				"spec:",
+				"  replicas: 3",
+				"  selector:",
+				"    matchLabels:",
+			},
+			wantMatchedTexts: []string{},
+			description: "no label-annotation matches expected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diffCheck := types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundNotExpected: tt.lines,
+			}
+
+			result := engine.Evaluate(diffCheck)
+
+			// Collect matched texts from label-annotation-rules.
+			matchedTexts := make(map[string]bool)
+			for _, cond := range result.Conditions {
+				if cond.RuleID == "label-annotation-rules" && cond.Matched {
+					matchedTexts[cond.MatchedText] = true
+				}
+			}
+
+			if len(matchedTexts) != len(tt.wantMatchedTexts) {
+				t.Errorf("%s: got %d matches, want %d.\nGot: %v\nWant: %v",
+					tt.description, len(matchedTexts), len(tt.wantMatchedTexts), matchedTexts, tt.wantMatchedTexts)
+				return
+			}
+
+			for _, want := range tt.wantMatchedTexts {
+				if !matchedTexts[want] {
+					t.Errorf("%s: expected match %q not found in results: %v",
+						tt.description, want, matchedTexts)
+				}
+			}
+		})
+	}
+}
+
+// TestLabelAnnotationWithContextLines verifies that labels/annotations are correctly
+// identified when the section header (labels:/annotations:) is a context line, not a changed line.
+func TestLabelAnnotationWithContextLines(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		diffCheck        types.DiffCheck
+		wantMatchedTexts []string
+		description      string
+	}{
+		{
+			name: "label header is context, value is changed",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: []types.DiffLine{
+					{Content: "  labels:", IsChanged: false},                        // context
+					{Content: "    config.nokia.com/reboot: required", IsChanged: true}, // changed
+					{Content: "    existing-label: value", IsChanged: false},        // context
+				},
+				FoundNotExpected: []string{
+					"    config.nokia.com/reboot: required",
+				},
+			},
+			wantMatchedTexts: []string{
+				"config.nokia.com/reboot: required",
+			},
+			description: "Should match label even when labels: is a context line",
+		},
+		{
+			name: "annotation header is context, value is changed",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: []types.DiffLine{
+					{Content: "metadata:", IsChanged: false},
+					{Content: "  annotations:", IsChanged: false},                           // context
+					{Content: "    openshift.io/node-selector: \"\"", IsChanged: true},      // changed
+					{Content: "    workload.openshift.io/allowed: management", IsChanged: false},
+				},
+				FoundNotExpected: []string{
+					"    openshift.io/node-selector: \"\"",
+				},
+			},
+			wantMatchedTexts: []string{
+				"openshift.io/node-selector: \"\"",
+			},
+			description: "Should match annotation even when annotations: is a context line",
+		},
+		{
+			name: "mixed: some labels changed, some context",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: []types.DiffLine{
+					{Content: "  annotations:", IsChanged: false},
+					{Content: "    new-annotation: value1", IsChanged: true},
+					{Content: "    existing-annotation: value2", IsChanged: false},
+					{Content: "  labels:", IsChanged: false},
+					{Content: "    new-label: value3", IsChanged: true},
+				},
+				FoundNotExpected: []string{
+					"    new-annotation: value1",
+					"    new-label: value3",
+				},
+			},
+			wantMatchedTexts: []string{
+				"new-annotation: value1",
+				"new-label: value3",
+			},
+			description: "Should match only changed lines in both sections",
+		},
+		{
+			name: "no context available - falls back to plain evaluation",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundWithContext: nil, // No context
+				FoundNotExpected: []string{
+					"  labels:",
+					"    app: myapp",
+				},
+			},
+			wantMatchedTexts: []string{
+				"labels:",
+				"app: myapp",
+			},
+			description: "Should fall back to plain evaluation when no context",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := engine.Evaluate(tt.diffCheck)
+
+			// Collect matched texts from label-annotation-rules.
+			matchedTexts := make(map[string]bool)
+			for _, cond := range result.Conditions {
+				if cond.RuleID == "label-annotation-rules" && cond.Matched {
+					matchedTexts[cond.MatchedText] = true
+				}
+			}
+
+			if len(matchedTexts) != len(tt.wantMatchedTexts) {
+				t.Errorf("%s: got %d matches, want %d.\nGot: %v\nWant: %v",
+					tt.description, len(matchedTexts), len(tt.wantMatchedTexts), matchedTexts, tt.wantMatchedTexts)
+				return
+			}
+
+			for _, want := range tt.wantMatchedTexts {
+				if !matchedTexts[want] {
+					t.Errorf("%s: expected match %q not found in results: %v",
+						tt.description, want, matchedTexts)
+				}
+			}
+		})
+	}
+}
+
+// TestLabelAnnotationValueDifferences verifies that labels/annotations with value
+// differences (same key, different values) are evaluated.
+func TestLabelAnnotationValueDifferences(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		diffCheck        types.DiffCheck
+		wantMatchedTexts []string
+		description      string
+	}{
+		{
+			name: "annotation value difference with context",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				ExpectedValue: []string{
+					"    operatorframework.io/bundle-unpack-min-retry-interval: 10m",
+				},
+				FoundValue: []string{
+					"    operatorframework.io/bundle-unpack-min-retry-interval: 5m",
+				},
+				ExpectedWithContext: []types.DiffLine{
+					{Content: "metadata:", IsChanged: false},
+					{Content: "  annotations:", IsChanged: false},
+					{Content: "    operatorframework.io/bundle-unpack-min-retry-interval: 10m", IsChanged: true},
+				},
+				FoundWithContext: []types.DiffLine{
+					{Content: "metadata:", IsChanged: false},
+					{Content: "  annotations:", IsChanged: false},
+					{Content: "    operatorframework.io/bundle-unpack-min-retry-interval: 5m", IsChanged: true},
+					{Content: "  labels:", IsChanged: false},
+					{Content: "    config.nokia.com/reboot: required", IsChanged: true},
+				},
+			},
+			wantMatchedTexts: []string{
+				// Only FoundValue is matched for labels/annotations, not ExpectedValue
+				"operatorframework.io/bundle-unpack-min-retry-interval: 5m",
+			},
+			description: "Should match annotation value differences",
+		},
+		{
+			name: "label value difference",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				ExpectedValue: []string{
+					"    app.kubernetes.io/version: v1",
+				},
+				FoundValue: []string{
+					"    app.kubernetes.io/version: v2",
+				},
+				ExpectedWithContext: []types.DiffLine{
+					{Content: "  labels:", IsChanged: false},
+					{Content: "    app.kubernetes.io/version: v1", IsChanged: true},
+				},
+				FoundWithContext: []types.DiffLine{
+					{Content: "  labels:", IsChanged: false},
+					{Content: "    app.kubernetes.io/version: v2", IsChanged: true},
+				},
+			},
+			wantMatchedTexts: []string{
+				// Only FoundValue is matched for labels/annotations, not ExpectedValue
+				"app.kubernetes.io/version: v2",
+			},
+			description: "Should match label value differences",
+		},
+		{
+			name: "mixed: value diff and new labels",
+			diffCheck: types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundNotExpected: []string{
+					"    new-label: value",
+				},
+				ExpectedValue: []string{
+					"    existing-annotation: old-value",
+				},
+				FoundValue: []string{
+					"    existing-annotation: new-value",
+				},
+				FoundWithContext: []types.DiffLine{
+					{Content: "  annotations:", IsChanged: false},
+					{Content: "    existing-annotation: new-value", IsChanged: true},
+					{Content: "  labels:", IsChanged: false},
+					{Content: "    new-label: value", IsChanged: true},
+				},
+				ExpectedWithContext: []types.DiffLine{
+					{Content: "  annotations:", IsChanged: false},
+					{Content: "    existing-annotation: old-value", IsChanged: true},
+				},
+			},
+			wantMatchedTexts: []string{
+				"new-label: value",
+				// Only FoundValue is matched for labels/annotations, not ExpectedValue
+				"existing-annotation: new-value",
+			},
+			description: "Should match both new labels and value differences",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := engine.Evaluate(tt.diffCheck)
+
+			// Collect matched texts from label-annotation-rules.
+			matchedTexts := make(map[string]bool)
+			for _, cond := range result.Conditions {
+				if cond.RuleID == "label-annotation-rules" && cond.Matched {
+					matchedTexts[cond.MatchedText] = true
+				}
+			}
+
+			if len(matchedTexts) != len(tt.wantMatchedTexts) {
+				t.Errorf("%s: got %d matches, want %d.\nGot: %v\nWant: %v",
+					tt.description, len(matchedTexts), len(tt.wantMatchedTexts), matchedTexts, tt.wantMatchedTexts)
+				return
+			}
+
+			for _, want := range tt.wantMatchedTexts {
+				if !matchedTexts[want] {
+					t.Errorf("%s: expected match %q not found in results: %v",
+						tt.description, want, matchedTexts)
 				}
 			}
 		})

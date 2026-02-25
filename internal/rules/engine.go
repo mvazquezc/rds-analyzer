@@ -144,10 +144,49 @@ func (e *Engine) evaluateLabelsAndAnnotations(diffCheck types.DiffCheck) Evaluat
 		Conditions: []ConditionResult{},
 	}
 
-	result.Conditions = append(result.Conditions,
-		e.extractAndEvaluateLabelAnnotations(diffCheck.FoundNotExpected, "FoundNotExpected")...)
-	result.Conditions = append(result.Conditions,
-		e.extractAndEvaluateLabelAnnotations(diffCheck.ExpectedNotFound, "ExpectedNotFound")...)
+	// Use context-aware evaluation if available (includes section headers like labels:/annotations:).
+	// Pass the target lines to filter which lines to actually match.
+	// Fall back to plain lines if context is not available.
+
+	// Evaluate FoundNotExpected (lines found but not in template).
+	if len(diffCheck.FoundWithContext) > 0 {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotationsWithContext(
+				diffCheck.FoundWithContext,
+				diffCheck.FoundNotExpected,
+				"FoundNotExpected")...)
+	} else {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotations(diffCheck.FoundNotExpected, "FoundNotExpected")...)
+	}
+
+	// Evaluate ExpectedNotFound (lines in template but not found).
+	if len(diffCheck.ExpectedWithContext) > 0 {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotationsWithContext(
+				diffCheck.ExpectedWithContext,
+				diffCheck.ExpectedNotFound,
+				"ExpectedNotFound")...)
+	} else {
+		result.Conditions = append(result.Conditions,
+			e.extractAndEvaluateLabelAnnotations(diffCheck.ExpectedNotFound, "ExpectedNotFound")...)
+	}
+
+	// Evaluate value differences (same key, different values).
+	// Only evaluate FoundValue (actual cluster values), not ExpectedValue (template values).
+	// For labels/annotations, we care about what's IN the cluster, not what's expected.
+	if len(diffCheck.FoundValue) > 0 {
+		if len(diffCheck.FoundWithContext) > 0 {
+			result.Conditions = append(result.Conditions,
+				e.extractAndEvaluateLabelAnnotationsWithContext(
+					diffCheck.FoundWithContext,
+					diffCheck.FoundValue,
+					"ExpectedFound")...)
+		} else {
+			result.Conditions = append(result.Conditions,
+				e.extractAndEvaluateLabelAnnotations(diffCheck.FoundValue, "ExpectedFound")...)
+		}
+	}
 
 	result.Matched = e.hasAnyMatchedCondition(result.Conditions)
 
@@ -160,6 +199,55 @@ func (e *Engine) evaluateLabelsAndAnnotations(diffCheck types.DiffCheck) Evaluat
 	}
 
 	return result
+}
+
+// extractAndEvaluateLabelAnnotationsWithContext processes lines with context to find and evaluate labels/annotations.
+// It uses context lines to track section headers (labels:/annotations:) but only creates matches for lines
+// that are both changed AND present in targetLines.
+func (e *Engine) extractAndEvaluateLabelAnnotationsWithContext(contextLines []types.DiffLine, targetLines []string, conditionType string) []ConditionResult {
+	var results []ConditionResult
+	var currentType string
+	var sectionIndent int = -1
+
+	// Build a set of target line contents for fast lookup.
+	targetSet := make(map[string]bool)
+	for _, line := range targetLines {
+		targetSet[strings.TrimSpace(line)] = true
+	}
+
+	defaultImpact, defaultComment := e.getLabelAnnotationDefaults()
+
+	for _, diffLine := range contextLines {
+		line := diffLine.Content
+		trimmed := strings.TrimSpace(line)
+		lineIndent := getIndentLevel(line)
+
+		// Check for section headers in ALL lines (context and changed).
+		if sectionType := e.detectSectionHeader(trimmed); sectionType != "" {
+			currentType = sectionType
+			sectionIndent = lineIndent
+			// Only create a result for section headers that are in targetLines.
+			if targetSet[trimmed] {
+				results = append(results, e.createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
+			}
+			continue
+		}
+
+		// Check if we should exit the section based on indentation.
+		if currentType != "" && lineIndent <= sectionIndent && trimmed != "" {
+			currentType = ""
+			sectionIndent = -1
+		}
+
+		// Only evaluate lines that are inside a labels/annotations section AND in targetLines.
+		if currentType != "" && trimmed != "" && targetSet[trimmed] {
+			if condResult := e.evaluateLabelAnnotationLine(trimmed, currentType, conditionType); condResult != nil {
+				results = append(results, *condResult)
+			}
+		}
+	}
+
+	return results
 }
 
 // hasAnyMatchedCondition checks if any condition in the slice matched.
@@ -176,20 +264,26 @@ func (e *Engine) hasAnyMatchedCondition(conditions []ConditionResult) bool {
 func (e *Engine) extractAndEvaluateLabelAnnotations(lines []string, conditionType string) []ConditionResult {
 	var results []ConditionResult
 	var currentType string
+	var sectionIndent int = -1 // Indentation level of the section header (labels:/annotations:)
 
 	defaultImpact, defaultComment := e.getLabelAnnotationDefaults()
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		lineIndent := getIndentLevel(line)
 
 		if sectionType := e.detectSectionHeader(trimmed); sectionType != "" {
 			currentType = sectionType
+			sectionIndent = lineIndent
 			results = append(results, e.createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
 			continue
 		}
 
-		if e.shouldResetSectionType(line, trimmed, currentType) {
+		// If we're in a section, check if we should exit based on indentation.
+		// Lines must be indented MORE than the section header to be part of it.
+		if currentType != "" && lineIndent <= sectionIndent && trimmed != "" {
 			currentType = ""
+			sectionIndent = -1
 		}
 
 		if currentType != "" && trimmed != "" {
@@ -200,6 +294,19 @@ func (e *Engine) extractAndEvaluateLabelAnnotations(lines []string, conditionTyp
 	}
 
 	return results
+}
+
+// getIndentLevel returns the number of leading whitespace characters in a line.
+func getIndentLevel(line string) int {
+	count := 0
+	for _, ch := range line {
+		if ch == ' ' || ch == '\t' {
+			count++
+		} else {
+			break
+		}
+	}
+	return count
 }
 
 // getLabelAnnotationDefaults returns the default impact and comment settings.
@@ -238,24 +345,6 @@ func (e *Engine) createSectionHeaderResult(conditionType, defaultImpact, default
 		Comment:       defaultComment,
 		MatchedText:   trimmed,
 	}
-}
-
-// shouldResetSectionType determines if we should exit the current section context.
-func (e *Engine) shouldResetSectionType(line, trimmed, currentType string) bool {
-	if currentType == "" || trimmed == "" {
-		return false
-	}
-
-	if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-		return false
-	}
-
-	if !strings.Contains(trimmed, ":") || trimmed == "labels:" || trimmed == "annotations:" {
-		return false
-	}
-
-	key, _ := parseSimpleKey(trimmed)
-	return key != "" && !strings.Contains(key, ".") && !strings.Contains(key, "/")
 }
 
 // evaluateLabelAnnotationLine evaluates a single label or annotation line.
@@ -887,9 +976,17 @@ func (e *Engine) EvaluateLabelOrAnnotation(key, value, laType string) LabelAnnot
 			continue
 		}
 
-		// If rule has a value pattern, check if it matches
-		if rule.Value != "" && !e.matchesLabelAnnotationPattern(rule.Value, value) {
-			continue
+		// Check value matching: ValueRegex takes precedence over Value
+		if rule.ValueRegex != "" {
+			// Use regex matching for value
+			if !e.matchesLabelAnnotationRegex(rule.ValueRegex, value) {
+				continue
+			}
+		} else if rule.Value != "" {
+			// Use glob pattern matching for value
+			if !e.matchesLabelAnnotationPattern(rule.Value, value) {
+				continue
+			}
 		}
 
 		// Calculate specificity for this match
@@ -928,9 +1025,11 @@ func (e *Engine) EvaluateLabelOrAnnotation(key, value, laType string) LabelAnnot
 // Higher scores indicate more specific matches.
 // Ranking (most to least specific):
 //   - Exact key + exact value: 600 + bonus
+//   - Exact key + regex value: 550 + bonus
 //   - Exact key + glob value:  500 + bonus
 //   - Exact key + any value:   400
 //   - Glob key + exact value:  300 + bonus
+//   - Glob key + regex value:  250 + bonus
 //   - Glob key + glob value:   200 + bonus
 //   - Glob key + any value:    100 + bonus
 //
@@ -938,12 +1037,15 @@ func (e *Engine) EvaluateLabelOrAnnotation(key, value, laType string) LabelAnnot
 func (e *Engine) calculateRuleSpecificity(rule *LabelAnnotationRule, key, value string) int {
 	isExactKey := !strings.Contains(rule.Key, "*")
 	hasValue := rule.Value != ""
+	hasValueRegex := rule.ValueRegex != ""
 	isExactValue := hasValue && !strings.Contains(rule.Value, "*")
 
 	var baseScore int
 	if isExactKey {
 		if isExactValue {
 			baseScore = 600
+		} else if hasValueRegex {
+			baseScore = 550
 		} else if hasValue {
 			baseScore = 500
 		} else {
@@ -952,6 +1054,8 @@ func (e *Engine) calculateRuleSpecificity(rule *LabelAnnotationRule, key, value 
 	} else {
 		if isExactValue {
 			baseScore = 300
+		} else if hasValueRegex {
+			baseScore = 250
 		} else if hasValue {
 			baseScore = 200
 		} else {
@@ -965,6 +1069,9 @@ func (e *Engine) calculateRuleSpecificity(rule *LabelAnnotationRule, key, value 
 	valueLiteralLen := 0
 	if hasValue {
 		valueLiteralLen = len(strings.ReplaceAll(rule.Value, "*", ""))
+	} else if hasValueRegex {
+		// For regex, use the regex pattern length as a rough specificity indicator
+		valueLiteralLen = len(rule.ValueRegex)
 	}
 
 	return baseScore + keyLiteralLen + valueLiteralLen
@@ -992,6 +1099,19 @@ func (e *Engine) matchesLabelAnnotationPattern(pattern, key string) bool {
 	}
 
 	return false
+}
+
+// matchesLabelAnnotationRegex checks if a value matches a regular expression pattern.
+func (e *Engine) matchesLabelAnnotationRegex(pattern, value string) bool {
+	if pattern == "" {
+		return true
+	}
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(value)
 }
 
 // IsLabelAnnotationLine checks if a line is a label or annotation and returns its type.
