@@ -34,7 +34,7 @@ func (g *TextGenerator) Generate(w io.Writer, report types.ValidationReport) err
 
 	// Show target version if set.
 	if targetVersion := g.ruleEngine.GetTargetVersion(); !targetVersion.IsZero() {
-		fmt.Fprintf(w, "Analyzing for OCP version: %s\n\n", targetVersion)
+		fmt.Fprintf(w, "Analyzing using target OCP version: %s\n\n", targetVersion)
 	}
 
 	g.printSummary(report.Summary)
@@ -49,10 +49,10 @@ func (g *TextGenerator) printSummary(summary types.Summary) {
 	fmt.Fprintln(g.writer, "==================================================")
 	fmt.Fprintln(g.writer, "               VALIDATION SUMMARY")
 	fmt.Fprintln(g.writer, "==================================================")
-	fmt.Fprintf(g.writer, "Total Missing CRs: %d\n", summary.NumMissing)
-	fmt.Fprintf(g.writer, "CRs with Differences: %d\n", summary.NumDiffCRs)
-	fmt.Fprintf(g.writer, "Total CRs Scanned: %d\n", summary.TotalCRs)
-	fmt.Fprintf(g.writer, "Unmatched CRs: %d\n", len(summary.UnmatchedCRS))
+	fmt.Fprintf(g.writer, "Total Missing CRs: %d - (CRs that were expected in the cluster but were not found)\n", summary.NumMissing)
+	fmt.Fprintf(g.writer, "CRs with Differences: %d - (CRs that have differences between the expected and found configuration)\n", summary.NumDiffCRs)
+	fmt.Fprintf(g.writer, "Total CRs Scanned: %d - (Total number of CRs that were scanned)\n", summary.TotalCRs)
+	fmt.Fprintf(g.writer, "Unmatched CRs: %d - (CRs that were found in the cluster but do not match any RDS template)\n", len(summary.UnmatchedCRS))
 	fmt.Fprintln(g.writer)
 }
 

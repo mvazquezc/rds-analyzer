@@ -81,9 +81,7 @@ func (g *ReportingGenerator) printHeader() {
 
 	targetVersion := g.ruleEngine.GetTargetVersion()
 	if !targetVersion.IsZero() {
-		fmt.Fprintf(g.writer, "OCP Version: %s\n", targetVersion)
-	} else {
-		fmt.Fprintln(g.writer, "OCP Version: Not specified")
+		fmt.Fprintf(g.writer, "Used target OCP version: %s\n", targetVersion)
 	}
 
 	fmt.Fprintf(g.writer, "Generated: %s\n", time.Now().Format("2006-01-02"))

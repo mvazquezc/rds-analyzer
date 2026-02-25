@@ -35,16 +35,16 @@ var rootCmd = &cobra.Command{
 	Long: `RDS Analyzer evaluates kube-compare JSON reports against a set of rules to determine the impact of configuration deviations from the reference configuration.
 
 Examples:
-  # Analyze from stdin with text output
-  cat results.json | rds-analyzer
+  # Analyze from stdin with text output and using custom rules file
+  cat results.json | rds-analyzer -r /path/to/custom-rules.yaml
 
-  # Analyze from file with HTML output
+  # Analyze from file with HTML output (using default rules file ./rules.yaml)
   rds-analyzer -i results.json -o html > report.html
 
-  # Analyze for specific OCP version
+  # Analyze using 4.19 OCP release for rules evaluation (using default rules file ./rules.yaml)
   rds-analyzer -i results.json -t 4.19
 
-  # Use custom rules file
+  # Use custom rules file and input file
   rds-analyzer -i results.json -r /path/to/rules.yaml
 
   # Generate reporting format
@@ -61,11 +61,11 @@ func Execute() error {
 
 func init() {
 	rootCmd.Flags().StringVarP(&outputFormat, "output", "o", "text",
-		"Output format: text or html")
+		"(Optional) Output format: text or html.")
 	rootCmd.Flags().StringVarP(&outputMode, "output-mode", "m", "simple",
-		"Output mode: simple (default) or reporting")
+		"(Optional) Output mode: simple or reporting")
 	rootCmd.Flags().StringVarP(&targetVersion, "target", "t", "",
-		"Target OCP version for rules evaluation (e.g., 4.19)")
+		"(Optional) Target OCP version for rules evaluation (e.g., 4.19). If not specified, the highest available version in the rules will be used.")
 	rootCmd.Flags().StringVarP(&inputFile, "input", "i", "",
 		"Input file path (reads from stdin if not specified)")
 	rootCmd.Flags().StringVarP(&rulesFile, "rules", "r", "./rules.yaml",
