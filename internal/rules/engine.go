@@ -176,20 +176,26 @@ func (e *Engine) hasAnyMatchedCondition(conditions []ConditionResult) bool {
 func (e *Engine) extractAndEvaluateLabelAnnotations(lines []string, conditionType string) []ConditionResult {
 	var results []ConditionResult
 	var currentType string
+	var sectionIndent int = -1 // Indentation level of the section header (labels:/annotations:)
 
 	defaultImpact, defaultComment := e.getLabelAnnotationDefaults()
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		lineIndent := getIndentLevel(line)
 
 		if sectionType := e.detectSectionHeader(trimmed); sectionType != "" {
 			currentType = sectionType
+			sectionIndent = lineIndent
 			results = append(results, e.createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
 			continue
 		}
 
-		if e.shouldResetSectionType(line, trimmed, currentType) {
+		// If we're in a section, check if we should exit based on indentation.
+		// Lines must be indented MORE than the section header to be part of it.
+		if currentType != "" && lineIndent <= sectionIndent && trimmed != "" {
 			currentType = ""
+			sectionIndent = -1
 		}
 
 		if currentType != "" && trimmed != "" {
@@ -200,6 +206,19 @@ func (e *Engine) extractAndEvaluateLabelAnnotations(lines []string, conditionTyp
 	}
 
 	return results
+}
+
+// getIndentLevel returns the number of leading whitespace characters in a line.
+func getIndentLevel(line string) int {
+	count := 0
+	for _, ch := range line {
+		if ch == ' ' || ch == '\t' {
+			count++
+		} else {
+			break
+		}
+	}
+	return count
 }
 
 // getLabelAnnotationDefaults returns the default impact and comment settings.
@@ -238,24 +257,6 @@ func (e *Engine) createSectionHeaderResult(conditionType, defaultImpact, default
 		Comment:       defaultComment,
 		MatchedText:   trimmed,
 	}
-}
-
-// shouldResetSectionType determines if we should exit the current section context.
-func (e *Engine) shouldResetSectionType(line, trimmed, currentType string) bool {
-	if currentType == "" || trimmed == "" {
-		return false
-	}
-
-	if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-		return false
-	}
-
-	if !strings.Contains(trimmed, ":") || trimmed == "labels:" || trimmed == "annotations:" {
-		return false
-	}
-
-	key, _ := parseSimpleKey(trimmed)
-	return key != "" && !strings.Contains(key, ".") && !strings.Contains(key, "/")
 }
 
 // evaluateLabelAnnotationLine evaluates a single label or annotation line.

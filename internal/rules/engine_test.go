@@ -1850,3 +1850,109 @@ func TestVersionedImpact_GetHighestDefinedVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestLabelAnnotationIndentationHandling verifies that non-label/annotation fields
+// at the same indentation level as labels:/annotations: are not incorrectly matched.
+func TestLabelAnnotationIndentationHandling(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		lines            []string
+		wantMatchedTexts []string
+		description      string
+	}{
+		{
+			name: "annotations followed by spec field at same indent",
+			lines: []string{
+				"  annotations:",
+				"    oauth-apiserver.openshift.io/secure-token-storage: \"true\"",
+				"  audit:",
+				"    profile: Default",
+			},
+			wantMatchedTexts: []string{
+				"annotations:",
+				"oauth-apiserver.openshift.io/secure-token-storage: \"true\"",
+			},
+			description: "audit: and profile: should NOT be matched as annotations",
+		},
+		{
+			name: "labels followed by spec field at same indent",
+			lines: []string{
+				"  labels:",
+				"    app: myapp",
+				"  spec:",
+				"    replicas: 3",
+			},
+			wantMatchedTexts: []string{
+				"labels:",
+				"app: myapp",
+			},
+			description: "spec: and replicas: should NOT be matched as labels",
+		},
+		{
+			name: "nested annotations with deeper content",
+			lines: []string{
+				"metadata:",
+				"  annotations:",
+				"    key1: value1",
+				"    key2: value2",
+				"  name: test",
+			},
+			wantMatchedTexts: []string{
+				"annotations:",
+				"key1: value1",
+				"key2: value2",
+			},
+			description: "name: at same level as annotations: should NOT be matched",
+		},
+		{
+			name: "no labels or annotations",
+			lines: []string{
+				"spec:",
+				"  replicas: 3",
+				"  selector:",
+				"    matchLabels:",
+			},
+			wantMatchedTexts: []string{},
+			description: "no label-annotation matches expected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diffCheck := types.DiffCheck{
+				CRName:           "test-cr",
+				TemplateFileName: "test.yaml",
+				FoundNotExpected: tt.lines,
+			}
+
+			result := engine.Evaluate(diffCheck)
+
+			// Collect matched texts from label-annotation-rules.
+			matchedTexts := make(map[string]bool)
+			for _, cond := range result.Conditions {
+				if cond.RuleID == "label-annotation-rules" && cond.Matched {
+					matchedTexts[cond.MatchedText] = true
+				}
+			}
+
+			if len(matchedTexts) != len(tt.wantMatchedTexts) {
+				t.Errorf("%s: got %d matches, want %d.\nGot: %v\nWant: %v",
+					tt.description, len(matchedTexts), len(tt.wantMatchedTexts), matchedTexts, tt.wantMatchedTexts)
+				return
+			}
+
+			for _, want := range tt.wantMatchedTexts {
+				if !matchedTexts[want] {
+					t.Errorf("%s: expected match %q not found in results: %v",
+						tt.description, want, matchedTexts)
+				}
+			}
+		})
+	}
+}
