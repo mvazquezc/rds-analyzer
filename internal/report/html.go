@@ -52,16 +52,19 @@ type MissingCRGroup struct {
 
 // DeviationData represents a deviation within a group.
 type DeviationData struct {
-	Name    string
-	Message string
-	CRs     []MissingCRData
+	Name            string
+	Message         string
+	CRs             []MissingCRData
+	IsOneOfRequired bool // True for "one of the following is required" deviations
+	HasSatisfiedCR  bool // True if at least one CR in this deviation is satisfied
 }
 
 // MissingCRData represents a single missing CR.
 type MissingCRData struct {
-	Path      string
-	Impact    string
-	ImpactCSS string
+	Path        string
+	Impact      string
+	ImpactCSS   string
+	IsSatisfied bool // True if this CR was found in correlated templates
 }
 
 // DiffData represents a single difference with rule evaluation.
@@ -168,14 +171,14 @@ func (g *HTMLGenerator) buildHTMLReport(report types.ValidationReport) HTMLRepor
 		htmlReport.OCPVersion = targetVersion.String()
 	}
 
-	htmlReport.MissingCRs, htmlReport.ImpactStats = g.processMissingCRs(report.Summary.ValidationIssues)
+	htmlReport.MissingCRs, htmlReport.ImpactStats = g.processMissingCRs(report.Summary.ValidationIssues, report.Diffs)
 	htmlReport.Summary.TotalMissing = htmlReport.ImpactStats.RequiredCRCount + htmlReport.ImpactStats.OptionalCRCount
 	htmlReport.Diffs, htmlReport.CountViolations = g.processDiffs(report.Diffs, &htmlReport.ImpactStats)
 
 	return htmlReport
 }
 
-func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues) ([]MissingCRGroup, ImpactStats) {
+func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues, diffs []types.Diff) ([]MissingCRGroup, ImpactStats) {
 	stats := ImpactStats{}
 	var groups []MissingCRGroup
 
@@ -183,7 +186,9 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues) ([]Miss
 		return groups, stats
 	}
 
-	missingCRResults := g.ruleEngine.EvaluateMissingCRs(issues)
+	// Extract correlated templates from diffs to determine satisfied CRs.
+	correlatedTemplates := rules.ExtractCorrelatedTemplates(diffs)
+	missingCRResults := g.ruleEngine.EvaluateMissingCRs(issues, correlatedTemplates)
 
 	groupKeys := make([]string, 0, len(issues))
 	for k := range issues {
@@ -208,16 +213,27 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues) ([]Miss
 		for _, deviationName := range deviationKeys {
 			deviation := deviations[deviationName]
 			devData := DeviationData{
-				Name:    deviationName,
-				Message: deviation.Msg,
+				Name:            deviationName,
+				Message:         deviation.Msg,
+				IsOneOfRequired: strings.Contains(deviation.Msg, "One of the following is required"),
+				HasSatisfiedCR:  false,
 			}
 
 			for _, cr := range deviation.CRs {
 				result := missingCRResults[cr]
+
+				// Determine impact CSS - override to green for satisfied CRs.
+				impactCSS := getImpactCSS(result.Impact)
+				if result.IsSatisfied {
+					impactCSS = "impact-satisfied"
+					devData.HasSatisfiedCR = true
+				}
+
 				crData := MissingCRData{
-					Path:      cr,
-					Impact:    result.Impact,
-					ImpactCSS: getImpactCSS(result.Impact),
+					Path:        cr,
+					Impact:      result.Impact,
+					ImpactCSS:   impactCSS,
+					IsSatisfied: result.IsSatisfied,
 				}
 				devData.CRs = append(devData.CRs, crData)
 
@@ -561,6 +577,26 @@ const htmlTemplate = `<!DOCTYPE html>
             background-color: rgba(108, 117, 125, 0.15);
             color: var(--color-needs-review);
             border: 1px solid var(--color-needs-review);
+        }
+
+        .impact-satisfied {
+            background-color: rgba(40, 167, 69, 0.15);
+            color: var(--color-not-deviation);
+            border: 1px solid var(--color-not-deviation);
+        }
+
+        .none-found-box {
+            border: 2px solid #fd7e14;
+            background-color: rgba(253, 126, 20, 0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+
+        .none-found-header {
+            color: #d63300;
+            font-weight: 600;
+            margin-bottom: 10px;
         }
 
         .group-card {
@@ -1322,10 +1358,17 @@ const htmlTemplate = `<!DOCTYPE html>
                             <div class="deviation-item" style="padding: 10px 0; border-bottom: 1px solid #eee;">
                                 <div class="deviation-name" style="font-weight: 500; margin-bottom: 5px;">{{.Name}}</div>
                                 <div class="deviation-msg" style="font-size: 0.9rem; color: #6c757d; margin-bottom: 10px;">{{.Message}}</div>
-                                <ul class="cr-list" style="list-style: none; margin: 0; padding: 0;">
+                                {{if and .IsOneOfRequired (not .HasSatisfiedCR)}}
+                                <div style="color: #dc3545; font-weight: 600; margin-bottom: 8px;">🔴 None found</div>
+                                {{end}}
+                                <ul class="cr-list" style="list-style: none; margin: 0; padding: 0;{{if and .IsOneOfRequired (not .HasSatisfiedCR)}} margin-left: 20px;{{end}}">
                                     {{range .CRs}}
                                     <li style="padding: 4px 0; display: flex; align-items: center; gap: 8px;">
+                                        {{if .IsSatisfied}}
+                                        <span class="impact-badge impact-satisfied">✓ Satisfied</span>
+                                        {{else}}
                                         <span class="impact-badge {{.ImpactCSS}}">{{.Impact}}</span>
+                                        {{end}}
                                         <span style="font-family: monospace; font-size: 0.85rem;">{{.Path}}</span>
                                     </li>
                                     {{end}}

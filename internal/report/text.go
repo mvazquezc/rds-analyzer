@@ -38,7 +38,7 @@ func (g *TextGenerator) Generate(w io.Writer, report types.ValidationReport) err
 	}
 
 	g.printSummary(report.Summary)
-	g.printMissingCRs(report.Summary.ValidationIssues)
+	g.printMissingCRs(report.Summary.ValidationIssues, report.Diffs)
 	g.printDiffs(report.Diffs)
 
 	return nil
@@ -56,8 +56,11 @@ func (g *TextGenerator) printSummary(summary types.Summary) {
 	fmt.Fprintln(g.writer)
 }
 
+// ColorOrange is the ANSI color code for orange text.
+const ColorOrange = "\033[38;5;208m"
+
 // printMissingCRs outputs the missing CRs section with impact evaluation.
-func (g *TextGenerator) printMissingCRs(issues types.ValidationIssues) {
+func (g *TextGenerator) printMissingCRs(issues types.ValidationIssues, diffs []types.Diff) {
 	fmt.Fprintln(g.writer, "==================================================")
 	fmt.Fprintln(g.writer, "             MISSING CUSTOM RESOURCES")
 	fmt.Fprintln(g.writer, "==================================================")
@@ -68,8 +71,9 @@ func (g *TextGenerator) printMissingCRs(issues types.ValidationIssues) {
 		return
 	}
 
-	// Pre-evaluate all missing CRs.
-	missingCRResults := g.ruleEngine.EvaluateMissingCRs(issues)
+	// Extract correlated templates and pre-evaluate all missing CRs.
+	correlatedTemplates := rules.ExtractCorrelatedTemplates(diffs)
+	missingCRResults := g.ruleEngine.EvaluateMissingCRs(issues, correlatedTemplates)
 
 	// Track impact statistics.
 	missingStats := map[string]int{
@@ -98,14 +102,42 @@ func (g *TextGenerator) printMissingCRs(issues types.ValidationIssues) {
 
 		for _, deviationName := range deviationKeys {
 			deviation := deviations[deviationName]
+			isOneOfRequired := strings.Contains(deviation.Msg, "One of the following is required")
+
+			// Check if any CR in this deviation is satisfied.
+			hasSatisfied := false
+			if isOneOfRequired {
+				for _, cr := range deviation.CRs {
+					if missingCRResults[cr].IsSatisfied {
+						hasSatisfied = true
+						break
+					}
+				}
+			}
+
 			fmt.Fprintf(g.writer, "  - %s: %s\n", deviationName, deviation.Msg)
+
+			// Show "🔴 None found" header when none of the alternatives are satisfied.
+			if isOneOfRequired && !hasSatisfied {
+				fmt.Fprintf(g.writer, "    🔴 None found\n")
+			}
 
 			for _, cr := range deviation.CRs {
 				result := missingCRResults[cr]
 				missingStats[result.Impact]++
 
-				impactSymbol := getImpactSymbol(result.Impact)
-				fmt.Fprintf(g.writer, "    %s %s\n", impactSymbol, cr)
+				// Use extra indentation when showing "None found" header.
+				indent := "    "
+				if isOneOfRequired && !hasSatisfied {
+					indent = "      "
+				}
+
+				if result.IsSatisfied {
+					fmt.Fprintf(g.writer, "%s🟢 %s (satisfied)\n", indent, cr)
+				} else {
+					impactSymbol := getImpactSymbol(result.Impact)
+					fmt.Fprintf(g.writer, "%s%s %s\n", indent, impactSymbol, cr)
+				}
 			}
 		}
 		fmt.Fprintln(g.writer)

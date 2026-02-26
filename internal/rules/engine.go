@@ -901,13 +901,34 @@ func (e *Engine) compareValues(count, value int, operator string) bool {
 	}
 }
 
+// ExtractCorrelatedTemplates extracts all correlated template paths from diffs.
+// This is used to identify which templates are actually present in the cluster.
+func ExtractCorrelatedTemplates(diffs []types.Diff) []string {
+	var templates []string
+	for _, d := range diffs {
+		if d.CorrelatedTemplate != "" {
+			templates = append(templates, d.CorrelatedTemplate)
+		}
+	}
+	return templates
+}
+
 // EvaluateMissingCRs evaluates all missing CRs from validation issues.
 // Impact is derived from the JSON structure:
 //   - Group names starting with "required-" -> Impacting
 //   - Group names starting with "optional-" -> NotImpacting
 //   - Other groups -> NeedsReview
-func (e *Engine) EvaluateMissingCRs(issues types.ValidationIssues) map[string]MissingCRResult {
+//
+// The correlatedTemplates parameter is used to mark "one of the following is required"
+// CRs as satisfied when a matching template is found in the cluster diffs.
+func (e *Engine) EvaluateMissingCRs(issues types.ValidationIssues, correlatedTemplates []string) map[string]MissingCRResult {
 	results := make(map[string]MissingCRResult)
+
+	// Build lookup set for correlated templates (use basename for matching).
+	correlatedSet := make(map[string]bool)
+	for _, tmpl := range correlatedTemplates {
+		correlatedSet[filepath.Base(tmpl)] = true
+	}
 
 	for groupName, deviations := range issues {
 		baseImpact := e.determineBaseImpact(groupName)
@@ -915,14 +936,38 @@ func (e *Engine) EvaluateMissingCRs(issues types.ValidationIssues) map[string]Mi
 		for deviationName, deviation := range deviations {
 			isOneOfRequired := strings.Contains(deviation.Msg, "One of the following is required")
 
+			// First pass: check if ANY CR in this deviation is satisfied.
+			hasSatisfiedCR := false
+			if isOneOfRequired {
+				for _, crPath := range deviation.CRs {
+					basename := filepath.Base(crPath)
+					if correlatedSet[basename] {
+						hasSatisfiedCR = true
+						break
+					}
+				}
+			}
+
+			// Second pass: assign results with appropriate impact.
 			for _, crPath := range deviation.CRs {
+				basename := filepath.Base(crPath)
+				isSatisfied := isOneOfRequired && correlatedSet[basename]
+
+				// Determine impact: if "one of the following" has NO satisfied CRs,
+				// mark all CRs in the group as Impacting.
+				impact := baseImpact
+				if isOneOfRequired && !hasSatisfiedCR {
+					impact = "Impacting"
+				}
+
 				results[crPath] = MissingCRResult{
 					TemplatePath:    crPath,
-					Basename:        filepath.Base(crPath),
-					Impact:          baseImpact,
+					Basename:        basename,
+					Impact:          impact,
 					GroupName:       groupName,
 					DeviationName:   deviationName,
 					IsOneOfRequired: isOneOfRequired,
+					IsSatisfied:     isSatisfied,
 				}
 			}
 		}

@@ -51,8 +51,9 @@ type unresolvedDiffLines struct {
 func (g *ReportingGenerator) Generate(w io.Writer, report types.ValidationReport) error {
 	g.writer = w
 
-	// Evaluate all data.
-	missingCRResults := g.ruleEngine.EvaluateMissingCRs(report.Summary.ValidationIssues)
+	// Extract correlated templates and evaluate all data.
+	correlatedTemplates := rules.ExtractCorrelatedTemplates(report.Diffs)
+	missingCRResults := g.ruleEngine.EvaluateMissingCRs(report.Summary.ValidationIssues, correlatedTemplates)
 	diffResults, allDiffChecks := g.evaluateAllDiffs(report.Diffs)
 	// Use allDiffChecks for count rules to include NotADeviation CRs in the count.
 	countResults := g.ruleEngine.EvaluateCountRules(allDiffChecks)
@@ -517,8 +518,10 @@ func (g *ReportingGenerator) printMissingCRsByImpact(
 
 	// Build a map of group -> deviation -> CRs for the specified impacts.
 	type deviationData struct {
-		msg string
-		crs []string
+		msg             string
+		crs             []string
+		isOneOfRequired bool
+		hasSatisfiedCR  bool
 	}
 	groupData := make(map[string]map[string]*deviationData)
 
@@ -539,7 +542,15 @@ func (g *ReportingGenerator) printMissingCRsByImpact(
 					msg = dev.Msg
 				}
 			}
-			groupData[result.GroupName][result.DeviationName] = &deviationData{msg: msg}
+			groupData[result.GroupName][result.DeviationName] = &deviationData{
+				msg:             msg,
+				isOneOfRequired: result.IsOneOfRequired,
+			}
+		}
+
+		// Track if any CR is satisfied (for "one of the following" groups).
+		if result.IsSatisfied {
+			groupData[result.GroupName][result.DeviationName].hasSatisfiedCR = true
 		}
 
 		groupData[result.GroupName][result.DeviationName].crs = append(
@@ -569,9 +580,27 @@ func (g *ReportingGenerator) printMissingCRsByImpact(
 			data := deviations[devName]
 			fmt.Fprintf(g.writer, "    - %s: %s\n", devName, data.msg)
 
+			// Show "NONE FOUND" header for unsatisfied "one of the following" groups.
+			if data.isOneOfRequired && !data.hasSatisfiedCR {
+				fmt.Fprintf(g.writer, "      [NONE FOUND]\n")
+			}
+
 			sort.Strings(data.crs)
 			for _, cr := range data.crs {
-				fmt.Fprintf(g.writer, "      %s\n", cr)
+				result := results[cr]
+
+				// Determine indentation based on whether we have a "NONE FOUND" header.
+				indent := "      "
+				if data.isOneOfRequired && !data.hasSatisfiedCR {
+					indent = "        "
+				}
+
+				// Print with satisfaction or impact indicator.
+				if result.IsSatisfied {
+					fmt.Fprintf(g.writer, "%s[SATISFIED] %s\n", indent, cr)
+				} else {
+					fmt.Fprintf(g.writer, "%s[%s] %s\n", indent, result.Impact, cr)
+				}
 			}
 		}
 		fmt.Fprintln(g.writer)

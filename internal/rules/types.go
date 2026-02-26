@@ -197,6 +197,8 @@ type MissingCRResult struct {
 	DeviationName string
 	// IsOneOfRequired is true for "one of the following is required" groups.
 	IsOneOfRequired bool
+	// IsSatisfied is true if this CR was found in correlated templates (for "one of the following" groups).
+	IsSatisfied bool
 }
 
 // LabelAnnotationResult represents the evaluation result for a label or annotation.
