@@ -567,7 +567,7 @@ func (g *TextGenerator) printOverallRuleResult(ruleResult rules.EvaluationResult
 	}
 
 	if hasNeedsReview {
-		fmt.Fprintf(g.writer, "  - \U0001F535 Some diffs from this deviation need to be reviewed by the telco team\n")
+		fmt.Fprintf(g.writer, "  - \U0001F50D Some lines need review by the telco team\n")
 	}
 
 	fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)

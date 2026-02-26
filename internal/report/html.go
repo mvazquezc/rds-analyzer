@@ -547,7 +547,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .stat-card {
-            background: #495057;
+            background: #5b7188;
             color: white;
             padding: 20px;
             border-radius: 10px;
@@ -975,12 +975,12 @@ const htmlTemplate = `<!DOCTYPE html>
 
         .impact-stat.impacting {
             border-color: var(--color-impacting);
-            background: rgba(220, 53, 69, 0.05);
+            background: rgba(220, 53, 69, 0.4);
         }
 
         .impact-stat.not-impacting {
             border-color: var(--color-not-impacting);
-            background: rgba(230, 168, 23, 0.05);
+            background: rgba(230, 168, 23, 0.4);
         }
 
         .impact-stat.not-deviation {
@@ -994,7 +994,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .impact-stat .count {
-            font-size: 2rem;
+            font-size: 2.5rem;
             font-weight: bold;
         }
 
@@ -1137,7 +1137,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         details.category-collapsible.required summary {
-            background: rgba(220, 53, 69, 0.15);
+            background: rgba(220, 53, 69, 0.4);
             border-left: 4px solid var(--color-impacting);
         }
 
@@ -1146,7 +1146,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         details.category-collapsible.optional summary {
-            background: rgba(230, 168, 23, 0.15);
+            background: rgba(230, 168, 23, 0.4);
             border-left: 4px solid var(--color-not-impacting);
         }
 
@@ -1309,7 +1309,7 @@ const htmlTemplate = `<!DOCTYPE html>
         <header>
             <h1>RDS Validation Report</h1>
             <div class="meta">
-                <span>Generated at {{.GeneratedAt}} {{if .OCPVersion}} using target OCP Version: {{.OCPVersion}}{{end}} </span>
+                <span>Generated at {{.GeneratedAt}}{{if .OCPVersion}}. Using target OCP Version: {{.OCPVersion}}{{end}} </span>
             </div>
         </header>
 
@@ -1361,36 +1361,73 @@ const htmlTemplate = `<!DOCTYPE html>
 
         <section class="section">
             <h2>Impact Summary</h2>
-            <h4 style="margin-bottom: 15px; color: #6c757d;">Detected Differences</h4>
-            <div class="impact-summary-grid">
-                <div class="impact-stat impacting">
-                    <div class="count">{{.ImpactStats.Impacting}}</div>
-                    <div class="label">Impacting</div>
-                </div>
-                <div class="impact-stat not-impacting">
-                    <div class="count">{{.ImpactStats.NotImpacting}}</div>
-                    <div class="label">Not Impacting</div>
-                </div>
-                <div class="impact-stat needs-review">
-                    <div class="count">{{.ImpactStats.NeedsReview}}</div>
-                    <div class="label">Needs Review</div>
-                </div>
-                <div class="impact-stat not-deviation">
-                    <div class="count">{{.ImpactStats.NotADeviation}}</div>
-                    <div class="label">Not a Deviation</div>
-                </div>
-            </div>
-            <h4 style="margin: 20px 0 15px 0; color: #6c757d;">Missing CRs</h4>
+            <h4 style="margin-bottom: 15px; color: #6c757d;">Missing CRs</h4>
             <div class="impact-summary-grid">
                 <div class="impact-stat impacting">
                     <div class="count">{{.ImpactStats.MissingImpacting}}</div>
-                    <div class="label">Impacting</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Must be addressed. No need to involve the telco team.</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="impact-stat not-impacting">
                     <div class="count">{{.ImpactStats.MissingNotImpacting}}</div>
-                    <div class="label">Not Impacting</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Not Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Engage with the telco team. Might require RDS expansion or support exception.</span>
+                        </span>
+                    </div>
                 </div>
             </div>
+            <h4 style="margin: 20px 0 15px 0; color: #6c757d;">Detected Differences</h4>
+            <div class="impact-summary-grid">
+                <div class="impact-stat impacting">
+                    <div class="count">{{.ImpactStats.Impacting}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Must be addressed. No need to involve the telco team.</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="impact-stat not-impacting">
+                    <div class="count">{{.ImpactStats.NotImpacting}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Not Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Engage with the telco team. Might require RDS expansion or support exception.</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="impact-stat needs-review">
+                    <div class="count">{{.ImpactStats.NeedsReview}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Needs Review
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">The tool couldn't identify the impact. Engage with the telco team to assess impact.</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="impact-stat not-deviation">
+                    <div class="count">{{.ImpactStats.NotADeviation}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Not a Deviation
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">No action required, you can keep these.</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
         </section>
 
         <section class="section">
@@ -1557,7 +1594,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
                     {{if .HasNeedsReview}}
                     <p style="margin-top: 10px; font-size: 0.9rem; color: #6c757d;">
-                        &#x1F535; Some lines need review by the telco team
+                        &#x1F50D; Some lines need review by the telco team
                     </p>
                     {{end}}
                     {{if .NoRulesMatched}}
