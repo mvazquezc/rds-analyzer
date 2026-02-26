@@ -262,13 +262,25 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues, diffs [
 	return groups, stats
 }
 
+// getImpactPriority returns the sort priority for an impact (lower = first).
+func getImpactPriority(impact string) int {
+	switch impact {
+	case "Impacting":
+		return 0
+	case "NotImpacting":
+		return 1
+	case "NeedsReview":
+		return 2
+	case "NotADeviation":
+		return 3
+	default:
+		return 4
+	}
+}
+
 func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]DiffData, []CountViolationData) {
 	var diffDataList []DiffData
 	var allDiffChecks []types.DiffCheck
-
-	// Count non-empty diffs for display numbering.
-	nonEmptyDiffs := parser.RemoveEmptyDiffs(diffs)
-	diffIndex := 0
 
 	for _, d := range diffs {
 		// Handle empty diffs - add minimal DiffCheck for count rules only.
@@ -280,10 +292,7 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 			continue
 		}
 
-		diffIndex++
 		diffData := DiffData{
-			Index:       diffIndex,
-			Total:       len(nonEmptyDiffs),
 			CRName:      d.CRName,
 			Template:    d.CorrelatedTemplate,
 			Description: d.Description,
@@ -371,6 +380,17 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 		}
 
 		diffDataList = append(diffDataList, diffData)
+	}
+
+	// Sort diffs by impact priority: Impacting -> NotImpacting -> NeedsReview -> NotADeviation.
+	sort.SliceStable(diffDataList, func(i, j int) bool {
+		return getImpactPriority(diffDataList[i].OverallImpact) < getImpactPriority(diffDataList[j].OverallImpact)
+	})
+
+	// Update Index and Total after sorting.
+	for i := range diffDataList {
+		diffDataList[i].Index = i + 1
+		diffDataList[i].Total = len(diffDataList)
 	}
 
 	var countViolations []CountViolationData

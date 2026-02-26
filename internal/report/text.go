@@ -150,6 +150,15 @@ func (g *TextGenerator) printMissingCRs(issues types.ValidationIssues, diffs []t
 	fmt.Fprintln(g.writer)
 }
 
+// evaluatedDiff holds a diff with its evaluation results for sorting.
+type evaluatedDiff struct {
+	diff        types.Diff
+	diffCheck   types.DiffCheck
+	ruleResult  rules.EvaluationResult
+	finalImpact string
+	parseError  error
+}
+
 // printDiffs outputs the configuration differences section.
 func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 	fmt.Fprintln(g.writer, "==================================================")
@@ -172,10 +181,8 @@ func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 	// Collect diffs for count rule evaluation.
 	var allDiffChecks []types.DiffCheck
 
-	// Count non-empty diffs for display numbering.
-	nonEmptyDiffs := parser.RemoveEmptyDiffs(diffs)
-	diffIndex := 0
-
+	// Pre-evaluate all diffs to determine their impact for sorting.
+	var evaluatedDiffs []evaluatedDiff
 	for _, d := range diffs {
 		// Handle empty diffs - add minimal DiffCheck for count rules only.
 		if d.DiffOutput == "" {
@@ -186,23 +193,42 @@ func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 			continue
 		}
 
-		diffIndex++
-		fmt.Fprintf(g.writer, "--- Diff %d of %d ---\n", diffIndex, len(nonEmptyDiffs))
-		fmt.Fprintf(g.writer, "CR Name: %s\n", d.CRName)
-		fmt.Fprintf(g.writer, "Template: %s\n", d.CorrelatedTemplate)
-		fmt.Fprintf(g.writer, "Description: %s\n", d.Description)
-		fmt.Fprintln(g.writer, "---")
-
+		ed := evaluatedDiff{diff: d}
 		formattedDiff, err := parser.ParseExpectedAndFound(d.DiffOutput, d.CRName, filepath.Base(d.CorrelatedTemplate))
 		if err != nil {
-			fmt.Fprintf(g.writer, "Error parsing diff: %v\n", err)
-			fmt.Fprintln(g.writer, d.DiffOutput)
+			ed.parseError = err
+			ed.finalImpact = "NeedsReview" // Parse errors need review
 		} else {
+			ed.diffCheck = formattedDiff
+			ed.ruleResult = g.ruleEngine.Evaluate(formattedDiff)
 			allDiffChecks = append(allDiffChecks, formattedDiff)
 
-			ruleResult := g.ruleEngine.Evaluate(formattedDiff)
-			finalImpact := g.printDiffCheck(formattedDiff, ruleResult)
-			impactStats[finalImpact]++
+			// Determine final impact.
+			hasNeedsReview := hasUnmatchedLines(formattedDiff, ed.ruleResult)
+			ed.finalImpact = determineImpact(ed.ruleResult, hasNeedsReview)
+		}
+		evaluatedDiffs = append(evaluatedDiffs, ed)
+	}
+
+	// Sort diffs by impact priority.
+	sort.SliceStable(evaluatedDiffs, func(i, j int) bool {
+		return getImpactPriority(evaluatedDiffs[i].finalImpact) < getImpactPriority(evaluatedDiffs[j].finalImpact)
+	})
+
+	// Print sorted diffs.
+	for diffIndex, ed := range evaluatedDiffs {
+		fmt.Fprintf(g.writer, "--- Diff %d of %d ---\n", diffIndex+1, len(evaluatedDiffs))
+		fmt.Fprintf(g.writer, "CR Name: %s\n", ed.diff.CRName)
+		fmt.Fprintf(g.writer, "Template: %s\n", ed.diff.CorrelatedTemplate)
+		fmt.Fprintf(g.writer, "Description: %s\n", ed.diff.Description)
+		fmt.Fprintln(g.writer, "---")
+
+		if ed.parseError != nil {
+			fmt.Fprintf(g.writer, "Error parsing diff: %v\n", ed.parseError)
+			fmt.Fprintln(g.writer, ed.diff.DiffOutput)
+		} else {
+			g.printDiffCheck(ed.diffCheck, ed.ruleResult)
+			impactStats[ed.finalImpact]++
 		}
 		fmt.Fprintln(g.writer)
 	}
@@ -439,6 +465,46 @@ func determineImpact(ruleResult rules.EvaluationResult, hasNeedsReview bool) str
 		return "NeedsReview"
 	}
 	return ruleResult.Impact
+}
+
+// hasUnmatchedLines checks if a diff has lines that aren't matched by any rule.
+func hasUnmatchedLines(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
+	// Check ExpectedNotFound lines.
+	for _, line := range diffCheck.ExpectedNotFound {
+		if !lineHasMatchingRule(line, "ExpectedNotFound", ruleResult) {
+			return true
+		}
+	}
+
+	// Check FoundNotExpected lines.
+	for _, line := range diffCheck.FoundNotExpected {
+		if !lineHasMatchingRule(line, "FoundNotExpected", ruleResult) {
+			return true
+		}
+	}
+
+	// Check FoundValue lines.
+	for _, line := range diffCheck.FoundValue {
+		if !lineHasMatchingRule(line, "ExpectedFound", ruleResult) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// lineHasMatchingRule checks if a line has at least one matching rule.
+func lineHasMatchingRule(line, diffType string, ruleResult rules.EvaluationResult) bool {
+	trimmedLine := strings.TrimSpace(line)
+	for _, condResult := range ruleResult.Conditions {
+		if condResult.ConditionType == diffType && condResult.Matched {
+			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
+			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // getMatchingRuleIDs returns rule IDs that matched a specific line.
