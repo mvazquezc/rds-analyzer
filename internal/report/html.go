@@ -52,16 +52,19 @@ type MissingCRGroup struct {
 
 // DeviationData represents a deviation within a group.
 type DeviationData struct {
-	Name    string
-	Message string
-	CRs     []MissingCRData
+	Name            string
+	Message         string
+	CRs             []MissingCRData
+	IsOneOfRequired bool // True for "one of the following is required" deviations
+	HasSatisfiedCR  bool // True if at least one CR in this deviation is satisfied
 }
 
 // MissingCRData represents a single missing CR.
 type MissingCRData struct {
-	Path      string
-	Impact    string
-	ImpactCSS string
+	Path        string
+	Impact      string
+	ImpactCSS   string
+	IsSatisfied bool // True if this CR was found in correlated templates
 }
 
 // DiffData represents a single difference with rule evaluation.
@@ -168,14 +171,14 @@ func (g *HTMLGenerator) buildHTMLReport(report types.ValidationReport) HTMLRepor
 		htmlReport.OCPVersion = targetVersion.String()
 	}
 
-	htmlReport.MissingCRs, htmlReport.ImpactStats = g.processMissingCRs(report.Summary.ValidationIssues)
+	htmlReport.MissingCRs, htmlReport.ImpactStats = g.processMissingCRs(report.Summary.ValidationIssues, report.Diffs)
 	htmlReport.Summary.TotalMissing = htmlReport.ImpactStats.RequiredCRCount + htmlReport.ImpactStats.OptionalCRCount
 	htmlReport.Diffs, htmlReport.CountViolations = g.processDiffs(report.Diffs, &htmlReport.ImpactStats)
 
 	return htmlReport
 }
 
-func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues) ([]MissingCRGroup, ImpactStats) {
+func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues, diffs []types.Diff) ([]MissingCRGroup, ImpactStats) {
 	stats := ImpactStats{}
 	var groups []MissingCRGroup
 
@@ -183,7 +186,9 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues) ([]Miss
 		return groups, stats
 	}
 
-	missingCRResults := g.ruleEngine.EvaluateMissingCRs(issues)
+	// Extract correlated templates from diffs to determine satisfied CRs.
+	correlatedTemplates := rules.ExtractCorrelatedTemplates(diffs)
+	missingCRResults := g.ruleEngine.EvaluateMissingCRs(issues, correlatedTemplates)
 
 	groupKeys := make([]string, 0, len(issues))
 	for k := range issues {
@@ -208,16 +213,27 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues) ([]Miss
 		for _, deviationName := range deviationKeys {
 			deviation := deviations[deviationName]
 			devData := DeviationData{
-				Name:    deviationName,
-				Message: deviation.Msg,
+				Name:            deviationName,
+				Message:         deviation.Msg,
+				IsOneOfRequired: strings.Contains(deviation.Msg, "One of the following is required"),
+				HasSatisfiedCR:  false,
 			}
 
 			for _, cr := range deviation.CRs {
 				result := missingCRResults[cr]
+
+				// Determine impact CSS - override to green for satisfied CRs.
+				impactCSS := getImpactCSS(result.Impact)
+				if result.IsSatisfied {
+					impactCSS = "impact-satisfied"
+					devData.HasSatisfiedCR = true
+				}
+
 				crData := MissingCRData{
-					Path:      cr,
-					Impact:    result.Impact,
-					ImpactCSS: getImpactCSS(result.Impact),
+					Path:        cr,
+					Impact:      result.Impact,
+					ImpactCSS:   impactCSS,
+					IsSatisfied: result.IsSatisfied,
 				}
 				devData.CRs = append(devData.CRs, crData)
 
@@ -246,13 +262,25 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues) ([]Miss
 	return groups, stats
 }
 
+// getImpactPriority returns the sort priority for an impact (lower = first).
+func getImpactPriority(impact string) int {
+	switch impact {
+	case "Impacting":
+		return 0
+	case "NotImpacting":
+		return 1
+	case "NeedsReview":
+		return 2
+	case "NotADeviation":
+		return 3
+	default:
+		return 4
+	}
+}
+
 func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]DiffData, []CountViolationData) {
 	var diffDataList []DiffData
 	var allDiffChecks []types.DiffCheck
-
-	// Count non-empty diffs for display numbering.
-	nonEmptyDiffs := parser.RemoveEmptyDiffs(diffs)
-	diffIndex := 0
 
 	for _, d := range diffs {
 		// Handle empty diffs - add minimal DiffCheck for count rules only.
@@ -264,10 +292,7 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 			continue
 		}
 
-		diffIndex++
 		diffData := DiffData{
-			Index:       diffIndex,
-			Total:       len(nonEmptyDiffs),
 			CRName:      d.CRName,
 			Template:    d.CorrelatedTemplate,
 			Description: d.Description,
@@ -355,6 +380,17 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 		}
 
 		diffDataList = append(diffDataList, diffData)
+	}
+
+	// Sort diffs by impact priority: Impacting -> NotImpacting -> NeedsReview -> NotADeviation.
+	sort.SliceStable(diffDataList, func(i, j int) bool {
+		return getImpactPriority(diffDataList[i].OverallImpact) < getImpactPriority(diffDataList[j].OverallImpact)
+	})
+
+	// Update Index and Total after sorting.
+	for i := range diffDataList {
+		diffDataList[i].Index = i + 1
+		diffDataList[i].Total = len(diffDataList)
 	}
 
 	var countViolations []CountViolationData
@@ -511,7 +547,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .stat-card {
-            background: #495057;
+            background: #5b7188;
             color: white;
             padding: 20px;
             border-radius: 10px;
@@ -527,6 +563,60 @@ const htmlTemplate = `<!DOCTYPE html>
             font-size: 0.9rem;
             opacity: 0.9;
             margin-top: 5px;
+        }
+
+        .tooltip-container {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tooltip-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            font-size: 0.75rem;
+            font-weight: bold;
+            cursor: help;
+        }
+
+        .tooltip-icon:hover + .tooltip-text,
+        .tooltip-text:hover {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .tooltip-text {
+            visibility: hidden;
+            opacity: 0;
+            position: absolute;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #212529;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            white-space: nowrap;
+            z-index: 100;
+            transition: opacity 0.2s;
+        }
+
+        .tooltip-text::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #212529 transparent transparent transparent;
         }
 
         .impact-badge {
@@ -561,6 +651,26 @@ const htmlTemplate = `<!DOCTYPE html>
             background-color: rgba(108, 117, 125, 0.15);
             color: var(--color-needs-review);
             border: 1px solid var(--color-needs-review);
+        }
+
+        .impact-satisfied {
+            background-color: rgba(40, 167, 69, 0.15);
+            color: var(--color-not-deviation);
+            border: 1px solid var(--color-not-deviation);
+        }
+
+        .none-found-box {
+            border: 2px solid #fd7e14;
+            background-color: rgba(253, 126, 20, 0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+
+        .none-found-header {
+            color: #d63300;
+            font-weight: 600;
+            margin-bottom: 10px;
         }
 
         .group-card {
@@ -865,12 +975,12 @@ const htmlTemplate = `<!DOCTYPE html>
 
         .impact-stat.impacting {
             border-color: var(--color-impacting);
-            background: rgba(220, 53, 69, 0.05);
+            background: rgba(220, 53, 69, 0.4);
         }
 
         .impact-stat.not-impacting {
             border-color: var(--color-not-impacting);
-            background: rgba(230, 168, 23, 0.05);
+            background: rgba(230, 168, 23, 0.4);
         }
 
         .impact-stat.not-deviation {
@@ -884,7 +994,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         .impact-stat .count {
-            font-size: 2rem;
+            font-size: 2.5rem;
             font-weight: bold;
         }
 
@@ -1027,7 +1137,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         details.category-collapsible.required summary {
-            background: rgba(220, 53, 69, 0.15);
+            background: rgba(220, 53, 69, 0.4);
             border-left: 4px solid var(--color-impacting);
         }
 
@@ -1036,7 +1146,7 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         details.category-collapsible.optional summary {
-            background: rgba(230, 168, 23, 0.15);
+            background: rgba(230, 168, 23, 0.4);
             border-left: 4px solid var(--color-not-impacting);
         }
 
@@ -1199,7 +1309,7 @@ const htmlTemplate = `<!DOCTYPE html>
         <header>
             <h1>RDS Validation Report</h1>
             <div class="meta">
-                <span>Generated at {{.GeneratedAt}} {{if .OCPVersion}} using target OCP Version: {{.OCPVersion}}{{end}} </span>
+                <span>Generated at {{.GeneratedAt}}{{if .OCPVersion}}. Using target OCP Version: {{.OCPVersion}}{{end}} </span>
             </div>
         </header>
 
@@ -1208,59 +1318,116 @@ const htmlTemplate = `<!DOCTYPE html>
             <div class="summary-grid">
                 <div class="stat-card">
                     <div class="value">{{.Summary.TotalCRs}}</div>
-                    <div class="label">CRs Scanned<br>(Total number of CRs that were scanned)</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            CRs Scanned
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Total number of CRs that were scanned</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="stat-card">
                     <div class="value">{{.Summary.TotalMissing}}</div>
-                    <div class="label">Missing CRs<br>(CRs that were expected in the cluster but were not found)</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Missing CRs
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">CRs that were expected in the cluster but were not found</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="stat-card">
                     <div class="value">{{.Summary.DiffCRs}}</div>
-                    <div class="label">CRs with Differences<br>(CRs that have differences between the expected and found configuration)</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            CRs with Differences
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">CRs that have differences between the expected and found configuration</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="stat-card">
                     <div class="value">{{.Summary.UnmatchedCRs}}</div>
-                    <div class="label">Unmatched CRs<br>(CRs that were found in the cluster but do not match any RDS template)</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Unmatched CRs
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">CRs that were found in the cluster but do not match any RDS template</span>
+                        </span>
+                    </div>
                 </div>
             </div>
         </section>
 
         <section class="section">
             <h2>Impact Summary</h2>
-            <h4 style="margin-bottom: 15px; color: #6c757d;">Detected Differences</h4>
-            <div class="impact-summary-grid">
-                <div class="impact-stat impacting">
-                    <div class="count">{{.ImpactStats.Impacting}}</div>
-                    <div class="label">Impacting</div>
-                </div>
-                <div class="impact-stat not-impacting">
-                    <div class="count">{{.ImpactStats.NotImpacting}}</div>
-                    <div class="label">Not Impacting</div>
-                </div>
-                <div class="impact-stat not-deviation">
-                    <div class="count">{{.ImpactStats.NotADeviation}}</div>
-                    <div class="label">Not a Deviation</div>
-                </div>
-                <div class="impact-stat needs-review">
-                    <div class="count">{{.ImpactStats.NeedsReview}}</div>
-                    <div class="label">Needs Review</div>
-                </div>
-            </div>
-            <h4 style="margin: 20px 0 15px 0; color: #6c757d;">Missing CRs</h4>
+            <h4 style="margin-bottom: 15px; color: #6c757d;">Missing CRs</h4>
             <div class="impact-summary-grid">
                 <div class="impact-stat impacting">
                     <div class="count">{{.ImpactStats.MissingImpacting}}</div>
-                    <div class="label">Impacting</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Must be addressed. No need to involve the telco team.</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="impact-stat not-impacting">
                     <div class="count">{{.ImpactStats.MissingNotImpacting}}</div>
-                    <div class="label">Not Impacting</div>
-                </div>
-                <div class="impact-stat needs-review">
-                    <div class="count">{{.ImpactStats.MissingNeedsReview}}</div>
-                    <div class="label">Needs Review</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Not Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Engage with the telco team. Might require RDS expansion or support exception.</span>
+                        </span>
+                    </div>
                 </div>
             </div>
+            <h4 style="margin: 20px 0 15px 0; color: #6c757d;">Detected Differences</h4>
+            <div class="impact-summary-grid">
+                <div class="impact-stat impacting">
+                    <div class="count">{{.ImpactStats.Impacting}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Must be addressed. No need to involve the telco team.</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="impact-stat not-impacting">
+                    <div class="count">{{.ImpactStats.NotImpacting}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Not Impacting
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">Engage with the telco team. Might require RDS expansion or support exception.</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="impact-stat needs-review">
+                    <div class="count">{{.ImpactStats.NeedsReview}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Needs Review
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">The tool couldn't identify the impact. Engage with the telco team to assess impact.</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="impact-stat not-deviation">
+                    <div class="count">{{.ImpactStats.NotADeviation}}</div>
+                    <div class="label">
+                        <span class="tooltip-container">
+                            Not a Deviation
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">No action required, you can keep these.</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
         </section>
 
         <section class="section">
@@ -1269,7 +1436,11 @@ const htmlTemplate = `<!DOCTYPE html>
             <details class="category-collapsible required" open>
                 <summary>
                     <div class="category-title">
-                        <span>Required</span>
+                        <span class="tooltip-container">
+                            Required
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">These CRs are required by the reference configuration and must be present in the cluster.</span>
+                        </span>
                         <span class="category-count">{{.ImpactStats.RequiredCRCount}} CRs</span>
                     </div>
                 </summary>
@@ -1305,7 +1476,11 @@ const htmlTemplate = `<!DOCTYPE html>
             <details class="category-collapsible optional">
                 <summary>
                     <div class="category-title">
-                        <span>Optional</span>
+                        <span class="tooltip-container">
+                            Optional
+                            <span class="tooltip-icon">?</span>
+                            <span class="tooltip-text">These CRs, although optional, are expected. Engage with the telco team to explain why these are missing from the cluster.</span>
+                        </span>
                         <span class="category-count">{{.ImpactStats.OptionalCRCount}} CRs</span>
                     </div>
                 </summary>
@@ -1322,10 +1497,17 @@ const htmlTemplate = `<!DOCTYPE html>
                             <div class="deviation-item" style="padding: 10px 0; border-bottom: 1px solid #eee;">
                                 <div class="deviation-name" style="font-weight: 500; margin-bottom: 5px;">{{.Name}}</div>
                                 <div class="deviation-msg" style="font-size: 0.9rem; color: #6c757d; margin-bottom: 10px;">{{.Message}}</div>
-                                <ul class="cr-list" style="list-style: none; margin: 0; padding: 0;">
+                                {{if and .IsOneOfRequired (not .HasSatisfiedCR)}}
+                                <div style="color: #dc3545; font-weight: 600; margin-bottom: 8px;">🔴 None found</div>
+                                {{end}}
+                                <ul class="cr-list" style="list-style: none; margin: 0; padding: 0;{{if and .IsOneOfRequired (not .HasSatisfiedCR)}} margin-left: 20px;{{end}}">
                                     {{range .CRs}}
                                     <li style="padding: 4px 0; display: flex; align-items: center; gap: 8px;">
+                                        {{if .IsSatisfied}}
+                                        <span class="impact-badge impact-satisfied">✓ Satisfied</span>
+                                        {{else}}
                                         <span class="impact-badge {{.ImpactCSS}}">{{.Impact}}</span>
+                                        {{end}}
                                         <span style="font-family: monospace; font-size: 0.85rem;">{{.Path}}</span>
                                     </li>
                                     {{end}}
@@ -1420,7 +1602,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
                     {{if .HasNeedsReview}}
                     <p style="margin-top: 10px; font-size: 0.9rem; color: #6c757d;">
-                        &#x1F535; Some lines need review by the telco team
+                        &#x1F50D; Some lines need review by the telco team
                     </p>
                     {{end}}
                     {{if .NoRulesMatched}}

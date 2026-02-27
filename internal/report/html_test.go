@@ -403,7 +403,7 @@ func TestHTMLGenerator_ProcessMissingCRs_Empty(t *testing.T) {
 	}
 
 	generator := NewHTMLGenerator(engine)
-	groups, stats := generator.processMissingCRs(nil)
+	groups, stats := generator.processMissingCRs(nil, nil)
 
 	if len(groups) != 0 {
 		t.Errorf("expected 0 groups for nil issues, got %d", len(groups))
@@ -436,7 +436,7 @@ func TestHTMLGenerator_ProcessMissingCRs_WithData(t *testing.T) {
 		},
 	}
 
-	groups, stats := generator.processMissingCRs(issues)
+	groups, stats := generator.processMissingCRs(issues, nil)
 
 	if len(groups) != 2 {
 		t.Errorf("expected 2 groups, got %d", len(groups))
@@ -503,6 +503,113 @@ func TestHTMLGenerator_ValueDiffs(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "<!DOCTYPE html>") {
 		t.Error("expected HTML output")
+	}
+}
+
+func TestHTMLGenerator_OneOfRequired_Satisfied(t *testing.T) {
+	rulesFile := createHTMLTestRulesFile(t)
+	engine, err := rules.NewEngine(rulesFile)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	generator := NewHTMLGenerator(engine)
+	report := types.ValidationReport{
+		Summary: types.Summary{
+			NumMissing: 2,
+			NumDiffCRs: 1,
+			TotalCRs:   10,
+			ValidationIssues: types.ValidationIssues{
+				"optional-ptp-config": {
+					"ptp-config": types.Deviation{
+						Msg: "One of the following is required",
+						CRs: []string{
+							"optional/ptp-config/PtpConfigBoundary.yaml",
+							"optional/ptp-config/PtpConfigBoundaryForEvent.yaml",
+						},
+					},
+				},
+			},
+		},
+		Diffs: []types.Diff{
+			{
+				DiffOutput:         "+  some: diff",
+				CorrelatedTemplate: "optional/ptp-config/PtpConfigBoundaryForEvent.yaml",
+				CRName:             "ptp.openshift.io/v1_PtpConfig_openshift-ptp_boundary",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err = generator.Generate(&buf, report)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Verify that the satisfied CSS class appears in output.
+	if !strings.Contains(output, "impact-satisfied") {
+		t.Error("expected impact-satisfied CSS class in output for satisfied CR")
+	}
+
+	// Verify that "Satisfied" text appears.
+	if !strings.Contains(output, "Satisfied") {
+		t.Error("expected 'Satisfied' text in output for satisfied CR")
+	}
+}
+
+func TestHTMLGenerator_OneOfRequired_NoneFound(t *testing.T) {
+	rulesFile := createHTMLTestRulesFile(t)
+	engine, err := rules.NewEngine(rulesFile)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	generator := NewHTMLGenerator(engine)
+	report := types.ValidationReport{
+		Summary: types.Summary{
+			NumMissing: 2,
+			NumDiffCRs: 0,
+			TotalCRs:   10,
+			ValidationIssues: types.ValidationIssues{
+				"optional-ptp-config": {
+					"ptp-config": types.Deviation{
+						Msg: "One of the following is required",
+						CRs: []string{
+							"optional/ptp-config/PtpConfigBoundary.yaml",
+							"optional/ptp-config/PtpConfigMaster.yaml",
+						},
+					},
+				},
+			},
+		},
+		Diffs: []types.Diff{
+			// No matching PTP diffs - none of the required alternatives are present.
+			{
+				DiffOutput:         "+  some: diff",
+				CorrelatedTemplate: "required/sriov/SriovConfig.yaml",
+				CRName:             "sriov.openshift.io/v1_SriovNetworkNodePolicy_config",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err = generator.Generate(&buf, report)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Verify that Impacting badges appear for unsatisfied "one of the following" CRs.
+	if !strings.Contains(output, "impact-impacting") {
+		t.Error("expected impact-impacting CSS class in output when no alternative is satisfied")
+	}
+
+	// Verify that "None found" header appears.
+	if !strings.Contains(output, "None found") {
+		t.Error("expected 'None found' header in output when no alternative is satisfied")
 	}
 }
 

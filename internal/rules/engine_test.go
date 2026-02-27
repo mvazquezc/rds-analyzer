@@ -789,7 +789,10 @@ func TestEvaluateMissingCRs(t *testing.T) {
 		},
 	}
 
-	results := engine.EvaluateMissingCRs(issues)
+	// Pass empty correlated templates (no diffs available).
+	// Since no correlated templates are provided, "one of the following is required"
+	// groups with no satisfied CRs should be marked as Impacting.
+	results := engine.EvaluateMissingCRs(issues, nil)
 
 	tests := []struct {
 		crPath          string
@@ -798,8 +801,9 @@ func TestEvaluateMissingCRs(t *testing.T) {
 	}{
 		{"required/cluster-logging/ClusterLogNS.yaml", "Impacting", false},
 		{"required/cluster-logging/ClusterLogForwarder.yaml", "Impacting", false},
-		{"optional/ptp-config/PtpConfigBoundary.yaml", "NotImpacting", true},
-		{"optional/ptp-config/PtpConfigMaster.yaml", "NotImpacting", true},
+		// "One of the following is required" with no satisfied CRs -> Impacting
+		{"optional/ptp-config/PtpConfigBoundary.yaml", "Impacting", true},
+		{"optional/ptp-config/PtpConfigMaster.yaml", "Impacting", true},
 		{"custom/path.yaml", "NeedsReview", false},
 	}
 
@@ -2209,6 +2213,184 @@ func TestLabelAnnotationWithContextLines(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExtractCorrelatedTemplates verifies template extraction from diffs.
+func TestExtractCorrelatedTemplates(t *testing.T) {
+	tests := []struct {
+		name     string
+		diffs    []types.Diff
+		wantLen  int
+		wantList []string
+	}{
+		{
+			name:     "empty diffs",
+			diffs:    []types.Diff{},
+			wantLen:  0,
+			wantList: nil,
+		},
+		{
+			name: "single diff with template",
+			diffs: []types.Diff{
+				{CorrelatedTemplate: "required/sriov/SriovConfig.yaml"},
+			},
+			wantLen:  1,
+			wantList: []string{"required/sriov/SriovConfig.yaml"},
+		},
+		{
+			name: "multiple diffs",
+			diffs: []types.Diff{
+				{CorrelatedTemplate: "required/sriov/SriovConfig.yaml"},
+				{CorrelatedTemplate: "optional/ptp-config/PtpConfigBoundaryForEvent.yaml"},
+				{CorrelatedTemplate: "required/logging/ClusterLogForwarder.yaml"},
+			},
+			wantLen:  3,
+			wantList: []string{"required/sriov/SriovConfig.yaml", "optional/ptp-config/PtpConfigBoundaryForEvent.yaml", "required/logging/ClusterLogForwarder.yaml"},
+		},
+		{
+			name: "diff with empty template",
+			diffs: []types.Diff{
+				{CorrelatedTemplate: "required/sriov/SriovConfig.yaml"},
+				{CorrelatedTemplate: ""},
+				{CorrelatedTemplate: "optional/ptp-config/PtpConfig.yaml"},
+			},
+			wantLen:  2,
+			wantList: []string{"required/sriov/SriovConfig.yaml", "optional/ptp-config/PtpConfig.yaml"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractCorrelatedTemplates(tt.diffs)
+			if len(result) != tt.wantLen {
+				t.Errorf("ExtractCorrelatedTemplates() returned %d templates, want %d", len(result), tt.wantLen)
+			}
+			for i, want := range tt.wantList {
+				if i < len(result) && result[i] != want {
+					t.Errorf("ExtractCorrelatedTemplates()[%d] = %q, want %q", i, result[i], want)
+				}
+			}
+		})
+	}
+}
+
+// TestEvaluateMissingCRs_OneOfRequired_Satisfied verifies IsSatisfied is true when CR is in correlated templates.
+func TestEvaluateMissingCRs_OneOfRequired_Satisfied(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	issues := types.ValidationIssues{
+		"optional-ptp-config": {
+			"ptp-config": {
+				Msg: "One of the following is required",
+				CRs: []string{
+					"optional/ptp-config/PtpConfigBoundary.yaml",
+					"optional/ptp-config/PtpConfigMaster.yaml",
+					"optional/ptp-config/PtpConfigBoundaryForEvent.yaml",
+				},
+			},
+		},
+	}
+
+	// Simulate that PtpConfigBoundaryForEvent.yaml was found in diffs.
+	correlatedTemplates := []string{"some/other/Template.yaml", "optional/ptp-config/PtpConfigBoundaryForEvent.yaml"}
+
+	results := engine.EvaluateMissingCRs(issues, correlatedTemplates)
+
+	// Check that the matched CR is satisfied.
+	satisfiedCR := results["optional/ptp-config/PtpConfigBoundaryForEvent.yaml"]
+	if !satisfiedCR.IsSatisfied {
+		t.Error("Expected PtpConfigBoundaryForEvent.yaml to be satisfied")
+	}
+	if !satisfiedCR.IsOneOfRequired {
+		t.Error("Expected PtpConfigBoundaryForEvent.yaml to be IsOneOfRequired")
+	}
+
+	// Check that the other CRs are not satisfied.
+	boundaryCR := results["optional/ptp-config/PtpConfigBoundary.yaml"]
+	if boundaryCR.IsSatisfied {
+		t.Error("Expected PtpConfigBoundary.yaml to NOT be satisfied")
+	}
+	if !boundaryCR.IsOneOfRequired {
+		t.Error("Expected PtpConfigBoundary.yaml to be IsOneOfRequired")
+	}
+
+	masterCR := results["optional/ptp-config/PtpConfigMaster.yaml"]
+	if masterCR.IsSatisfied {
+		t.Error("Expected PtpConfigMaster.yaml to NOT be satisfied")
+	}
+}
+
+// TestEvaluateMissingCRs_OneOfRequired_NoneFound verifies all IsSatisfied are false when none found.
+func TestEvaluateMissingCRs_OneOfRequired_NoneFound(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	issues := types.ValidationIssues{
+		"optional-ptp-config": {
+			"ptp-config": {
+				Msg: "One of the following is required",
+				CRs: []string{
+					"optional/ptp-config/PtpConfigBoundary.yaml",
+					"optional/ptp-config/PtpConfigMaster.yaml",
+				},
+			},
+		},
+	}
+
+	// No correlated templates match the PTP configs.
+	correlatedTemplates := []string{"some/other/Template.yaml", "required/sriov/SriovConfig.yaml"}
+
+	results := engine.EvaluateMissingCRs(issues, correlatedTemplates)
+
+	// All CRs should have IsSatisfied = false.
+	for crPath, result := range results {
+		if result.IsSatisfied {
+			t.Errorf("Expected %q to NOT be satisfied, but IsSatisfied=true", crPath)
+		}
+		if !result.IsOneOfRequired {
+			t.Errorf("Expected %q to have IsOneOfRequired=true", crPath)
+		}
+	}
+}
+
+// TestEvaluateMissingCRs_RegularMissing_NotSatisfied verifies regular missing CRs don't get IsSatisfied.
+func TestEvaluateMissingCRs_RegularMissing_NotSatisfied(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	issues := types.ValidationIssues{
+		"required-cluster-logging": {
+			"cluster-logging": {
+				Msg: "Missing CRs", // NOT "One of the following is required"
+				CRs: []string{
+					"required/cluster-logging/ClusterLogNS.yaml",
+				},
+			},
+		},
+	}
+
+	// Even if the template is in correlated templates, regular missing CRs shouldn't be satisfied.
+	correlatedTemplates := []string{"required/cluster-logging/ClusterLogNS.yaml"}
+
+	results := engine.EvaluateMissingCRs(issues, correlatedTemplates)
+
+	result := results["required/cluster-logging/ClusterLogNS.yaml"]
+	if result.IsSatisfied {
+		t.Error("Expected regular missing CR to NOT be satisfied (only one-of-required can be satisfied)")
+	}
+	if result.IsOneOfRequired {
+		t.Error("Expected regular missing CR to have IsOneOfRequired=false")
 	}
 }
 
