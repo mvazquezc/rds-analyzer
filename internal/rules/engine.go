@@ -917,6 +917,8 @@ func ExtractCorrelatedTemplates(diffs []types.Diff) []string {
 // Impact is derived from the JSON structure:
 //   - Group names starting with "required-" -> Impacting
 //   - Group names starting with "optional-" -> NotImpacting
+//   - CR paths starting with "required/" -> Impacting (fallback)
+//   - CR paths starting with "optional/" -> NotImpacting (fallback)
 //   - Other groups -> NeedsReview
 //
 // The correlatedTemplates parameter is used to mark "one of the following is required"
@@ -924,15 +926,13 @@ func ExtractCorrelatedTemplates(diffs []types.Diff) []string {
 func (e *Engine) EvaluateMissingCRs(issues types.ValidationIssues, correlatedTemplates []string) map[string]MissingCRResult {
 	results := make(map[string]MissingCRResult)
 
-	// Build lookup set for correlated templates (use basename for matching).
+	// Build lookup set for correlated templates using pathKey (parent dir + filename).
 	correlatedSet := make(map[string]bool)
 	for _, tmpl := range correlatedTemplates {
-		correlatedSet[filepath.Base(tmpl)] = true
+		correlatedSet[pathKey(tmpl)] = true
 	}
 
 	for groupName, deviations := range issues {
-		baseImpact := e.determineBaseImpact(groupName)
-
 		for deviationName, deviation := range deviations {
 			isOneOfRequired := strings.Contains(deviation.Msg, "One of the following is required")
 
@@ -940,8 +940,8 @@ func (e *Engine) EvaluateMissingCRs(issues types.ValidationIssues, correlatedTem
 			hasSatisfiedCR := false
 			if isOneOfRequired {
 				for _, crPath := range deviation.CRs {
-					basename := filepath.Base(crPath)
-					if correlatedSet[basename] {
+					key := pathKey(crPath)
+					if correlatedSet[key] {
 						hasSatisfiedCR = true
 						break
 					}
@@ -950,10 +950,14 @@ func (e *Engine) EvaluateMissingCRs(issues types.ValidationIssues, correlatedTem
 
 			// Second pass: assign results with appropriate impact.
 			for _, crPath := range deviation.CRs {
+				key := pathKey(crPath)
 				basename := filepath.Base(crPath)
-				isSatisfied := isOneOfRequired && correlatedSet[basename]
+				isSatisfied := isOneOfRequired && correlatedSet[key]
 
-				// Determine impact: if "one of the following" has NO satisfied CRs,
+				// Determine base impact from group name or CR path fallback.
+				baseImpact := e.determineBaseImpact(groupName, crPath)
+
+				// Override impact: if "one of the following" has NO satisfied CRs,
 				// mark all CRs in the group as Impacting.
 				impact := baseImpact
 				if isOneOfRequired && !hasSatisfiedCR {
@@ -977,14 +981,34 @@ func (e *Engine) EvaluateMissingCRs(issues types.ValidationIssues, correlatedTem
 }
 
 // determineBaseImpact determines impact from a group name prefix.
-func (e *Engine) determineBaseImpact(groupName string) string {
+// Falls back to CR path prefix when group name doesn't have a required-/optional- prefix.
+func (e *Engine) determineBaseImpact(groupName, crPath string) string {
 	if strings.HasPrefix(groupName, "required-") {
 		return "Impacting"
 	}
 	if strings.HasPrefix(groupName, "optional-") {
 		return "NotImpacting"
 	}
+	// Fallback: check CR path prefix when group name lacks prefix.
+	if strings.HasPrefix(crPath, "required/") {
+		return "Impacting"
+	}
+	if strings.HasPrefix(crPath, "optional/") {
+		return "NotImpacting"
+	}
 	return "NeedsReview"
+}
+
+// pathKey returns the last two path segments (parent dir + filename) for matching.
+// This provides more specific matching than basename alone while remaining flexible.
+func pathKey(path string) string {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	parent := filepath.Base(dir)
+	if parent == "." || parent == "/" {
+		return base
+	}
+	return filepath.Join(parent, base)
 }
 
 // EvaluateLabelOrAnnotation evaluates a label or annotation against configured rules.
