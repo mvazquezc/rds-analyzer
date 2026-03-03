@@ -197,10 +197,9 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues, diffs [
 	sort.Strings(groupKeys)
 
 	for _, groupName := range groupKeys {
-		isRequired := strings.HasPrefix(groupName, "required-")
 		group := MissingCRGroup{
 			GroupName:  groupName,
-			IsRequired: isRequired,
+			IsRequired: false, // Will be set based on CR impacts below.
 		}
 
 		deviations := issues[groupName]
@@ -209,6 +208,9 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues, diffs [
 			deviationKeys = append(deviationKeys, k)
 		}
 		sort.Strings(deviationKeys)
+
+		// Track if any CR in this group is impacting.
+		hasImpactingCR := false
 
 		for _, deviationName := range deviationKeys {
 			deviation := deviations[deviationName]
@@ -237,29 +239,47 @@ func (g *HTMLGenerator) processMissingCRs(issues types.ValidationIssues, diffs [
 				}
 				devData.CRs = append(devData.CRs, crData)
 
-				switch result.Impact {
-				case "Impacting":
-					stats.MissingImpacting++
-				case "NotImpacting":
-					stats.MissingNotImpacting++
-				default:
-					stats.MissingNeedsReview++
-				}
-
-				if isRequired {
-					stats.RequiredCRCount++
-				} else {
-					stats.OptionalCRCount++
+				if !result.IsSatisfied {
+					switch result.Impact {
+					case "Impacting":
+						stats.MissingImpacting++
+						hasImpactingCR = true
+					case "NotImpacting":
+						stats.MissingNotImpacting++
+					default:
+						stats.MissingNeedsReview++
+					}
 				}
 			}
 
 			group.Deviations = append(group.Deviations, devData)
 		}
 
+		// Group is required if any unsatisfied CR in it has Impacting impact.
+		group.IsRequired = hasImpactingCR
+		if hasImpactingCR {
+			stats.RequiredCRCount += countUnsatisfiedGroupCRs(group)
+		} else {
+			stats.OptionalCRCount += countUnsatisfiedGroupCRs(group)
+		}
+
 		groups = append(groups, group)
 	}
 
 	return groups, stats
+}
+
+// countUnsatisfiedGroupCRs counts the number of unsatisfied CRs in a MissingCRGroup.
+func countUnsatisfiedGroupCRs(group MissingCRGroup) int {
+	count := 0
+	for _, dev := range group.Deviations {
+		for _, cr := range dev.CRs {
+			if !cr.IsSatisfied {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 // getImpactPriority returns the sort priority for an impact (lower = first).
@@ -1457,10 +1477,17 @@ const htmlTemplate = `<!DOCTYPE html>
                             <div class="deviation-item" style="padding: 10px 0; border-bottom: 1px solid #eee;">
                                 <div class="deviation-name" style="font-weight: 500; margin-bottom: 5px;">{{.Name}}</div>
                                 <div class="deviation-msg" style="font-size: 0.9rem; color: #6c757d; margin-bottom: 10px;">{{.Message}}</div>
-                                <ul class="cr-list" style="list-style: none; margin: 0; padding: 0;">
+                                {{if and .IsOneOfRequired (not .HasSatisfiedCR)}}
+                                <div style="color: #dc3545; font-weight: 600; margin-bottom: 8px;">🔴 None found</div>
+                                {{end}}
+                                <ul class="cr-list" style="list-style: none; margin: 0; padding: 0;{{if and .IsOneOfRequired (not .HasSatisfiedCR)}} margin-left: 20px;{{end}}">
                                     {{range .CRs}}
                                     <li style="padding: 4px 0; display: flex; align-items: center; gap: 8px;">
+                                        {{if .IsSatisfied}}
+                                        <span class="impact-badge impact-satisfied">✓ Satisfied</span>
+                                        {{else}}
                                         <span class="impact-badge {{.ImpactCSS}}">{{.Impact}}</span>
+                                        {{end}}
                                         <span style="font-family: monospace; font-size: 0.85rem;">{{.Path}}</span>
                                     </li>
                                     {{end}}

@@ -2394,6 +2394,104 @@ func TestEvaluateMissingCRs_RegularMissing_NotSatisfied(t *testing.T) {
 	}
 }
 
+// TestPathKey verifies the pathKey function returns parent dir + filename.
+func TestPathKey(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"required/networking/metallb/metallb.yaml", "metallb/metallb.yaml"},
+		{"optional/logging/ClusterLogForwarder.yaml", "logging/ClusterLogForwarder.yaml"},
+		{"simple.yaml", "simple.yaml"},
+		{"one/two/three/four.yaml", "three/four.yaml"},
+		{"/absolute/path/to/file.yaml", "to/file.yaml"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			result := pathKey(tc.input)
+			if result != tc.expected {
+				t.Errorf("pathKey(%q) = %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestDetermineBaseImpact_CRPathFallback verifies that CR path prefix is used
+// as fallback when group name doesn't have required-/optional- prefix.
+func TestDetermineBaseImpact_CRPathFallback(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	tests := []struct {
+		groupName string
+		crPath    string
+		expected  string
+	}{
+		// Group name prefix takes precedence
+		{"required-networking", "optional/something.yaml", "Impacting"},
+		{"optional-logging", "required/something.yaml", "NotImpacting"},
+		// CR path fallback when group name lacks prefix
+		{"networking", "required/networking/metallb/metallb.yaml", "Impacting"},
+		{"logging", "optional/logging/ClusterLogForwarder.yaml", "NotImpacting"},
+		{"tuning", "optional/other/kdump-master.yaml", "NotImpacting"},
+		// Neither has prefix -> NeedsReview
+		{"custom-group", "custom/path/file.yaml", "NeedsReview"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.groupName+"_"+tc.crPath, func(t *testing.T) {
+			result := engine.determineBaseImpact(tc.groupName, tc.crPath)
+			if result != tc.expected {
+				t.Errorf("determineBaseImpact(%q, %q) = %q, want %q",
+					tc.groupName, tc.crPath, result, tc.expected)
+			}
+		})
+	}
+}
+
+// TestEvaluateMissingCRs_PathKeyMatching verifies that pathKey-based matching
+// distinguishes files with same name in different directories.
+func TestEvaluateMissingCRs_PathKeyMatching(t *testing.T) {
+	rulesPath := createTestRulesFile(t)
+	engine, err := NewEngine(rulesPath)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+
+	issues := types.ValidationIssues{
+		"optional-ptp": {
+			"ptp-config": types.Deviation{
+				Msg: "One of the following is required",
+				CRs: []string{
+					"optional/ptp/config.yaml",
+					"optional/ptp-alt/config.yaml",
+				},
+			},
+		},
+	}
+
+	// Only correlate the first one (ptp/config.yaml, not ptp-alt/config.yaml)
+	correlatedTemplates := []string{"optional/ptp/config.yaml"}
+
+	results := engine.EvaluateMissingCRs(issues, correlatedTemplates)
+
+	// First should be satisfied
+	result1 := results["optional/ptp/config.yaml"]
+	if !result1.IsSatisfied {
+		t.Error("Expected optional/ptp/config.yaml to be satisfied")
+	}
+
+	// Second should NOT be satisfied (different parent dir)
+	result2 := results["optional/ptp-alt/config.yaml"]
+	if result2.IsSatisfied {
+		t.Error("Expected optional/ptp-alt/config.yaml to NOT be satisfied (different parent dir)")
+	}
+}
+
 // TestLabelAnnotationValueDifferences verifies that labels/annotations with value
 // differences (same key, different values) are evaluated.
 func TestLabelAnnotationValueDifferences(t *testing.T) {
