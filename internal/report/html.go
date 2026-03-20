@@ -1565,6 +1565,37 @@ const htmlTemplate = `<!DOCTYPE html>
             {{end}}
         </section>
 
+        {{if .CountViolations}}
+        <section class="section">
+            <h2>Count Rule Violations <span class="badge" style="background: #6c757d; color: white;">{{len .CountViolations}}</span></h2>
+            {{range .CountViolations}}
+            <div class="violation-card {{.ImpactCSS}}">
+                <div class="violation-header">
+                    <div>
+                        <strong>{{.RuleID}}</strong>
+                        <span style="margin-left: 10px; color: #6c757d;">{{.Description}}</span>
+                    </div>
+                    <span class="impact-badge {{.ImpactCSS}}">{{.Impact}}</span>
+                </div>
+                <div class="violation-body">
+                    <p><strong>Count:</strong> {{.Count}} CRs matched</p>
+                    <p><strong>Comment:</strong> {{.Comment}}</p>
+                    {{if .MatchedCRs}}
+                    <div class="matched-crs">
+                        <h5>Matched CRs:</h5>
+                        <ul>
+                            {{range .MatchedCRs}}
+                            <li>{{.}}</li>
+                            {{end}}
+                        </ul>
+                    </div>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+        </section>
+        {{end}}
+
         <section class="section">
             <h2>Detected Differences <span class="badge" style="background: #6c757d; color: white;">{{len .Diffs}}</span></h2>
             {{if .Diffs}}
@@ -1658,37 +1689,6 @@ const htmlTemplate = `<!DOCTYPE html>
             <div class="no-data">No differences detected.</div>
             {{end}}
         </section>
-
-        {{if .CountViolations}}
-        <section class="section">
-            <h2>Count Rule Violations <span class="badge" style="background: #6c757d; color: white;">{{len .CountViolations}}</span></h2>
-            {{range .CountViolations}}
-            <div class="violation-card {{.ImpactCSS}}">
-                <div class="violation-header">
-                    <div>
-                        <strong>{{.RuleID}}</strong>
-                        <span style="margin-left: 10px; color: #6c757d;">{{.Description}}</span>
-                    </div>
-                    <span class="impact-badge {{.ImpactCSS}}">{{.Impact}}</span>
-                </div>
-                <div class="violation-body">
-                    <p><strong>Count:</strong> {{.Count}} CRs matched</p>
-                    <p><strong>Comment:</strong> {{.Comment}}</p>
-                    {{if .MatchedCRs}}
-                    <div class="matched-crs">
-                        <h5>Matched CRs:</h5>
-                        <ul>
-                            {{range .MatchedCRs}}
-                            <li>{{.}}</li>
-                            {{end}}
-                        </ul>
-                    </div>
-                    {{end}}
-                </div>
-            </div>
-            {{end}}
-        </section>
-        {{end}}
 
         <footer style="text-align: center; padding: 20px; color: #6c757d; font-size: 0.85rem;">
             Generated using <a href="https://github.com/openshift-kni/rds-analyzer">RDS Analyzer</a>

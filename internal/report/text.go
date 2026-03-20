@@ -161,10 +161,6 @@ type evaluatedDiff struct {
 
 // printDiffs outputs the configuration differences section.
 func (g *TextGenerator) printDiffs(diffs []types.Diff) {
-	fmt.Fprintln(g.writer, "==================================================")
-	fmt.Fprintln(g.writer, "              DETECTED DIFFERENCES")
-	fmt.Fprintln(g.writer, "==================================================")
-
 	if len(diffs) == 0 {
 		fmt.Fprintln(g.writer, "No differences detected.")
 		return
@@ -215,6 +211,16 @@ func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 		return getImpactPriority(evaluatedDiffs[i].finalImpact) < getImpactPriority(evaluatedDiffs[j].finalImpact)
 	})
 
+	// Evaluate and print count rule violations.
+	countResults := g.ruleEngine.EvaluateCountRules(allDiffChecks)
+	if len(countResults) > 0 {
+		g.printCountRuleResults(countResults, impactStats)
+	}
+
+	fmt.Fprintln(g.writer, "==================================================")
+	fmt.Fprintln(g.writer, "              DETECTED DIFFERENCES")
+	fmt.Fprintln(g.writer, "==================================================")
+
 	// Print sorted diffs.
 	for diffIndex, ed := range evaluatedDiffs {
 		fmt.Fprintf(g.writer, "--- Diff %d of %d ---\n", diffIndex+1, len(evaluatedDiffs))
@@ -231,12 +237,6 @@ func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 			impactStats[ed.finalImpact]++
 		}
 		fmt.Fprintln(g.writer)
-	}
-
-	// Evaluate and print count rule violations.
-	countResults := g.ruleEngine.EvaluateCountRules(allDiffChecks)
-	if len(countResults) > 0 {
-		g.printCountRuleResults(countResults, impactStats)
 	}
 
 	// Print summary statistics.
