@@ -1,0 +1,27 @@
+# -----------------------------------------------------------------------------
+# openshift-ci / Prow — how approval works (human-readable; not read by the bot)
+#
+# [APPROVALNOTIFIER] A PR may show as NOT APPROVED until the process below completes.
+#
+# Example: "This pull-request has been approved by: midu16, mvazquezc" reflects
+# /approve comments from those GitHub users when they are listed as approvers.
+#
+# The full list of commands accepted by this bot can be found here:
+#   https://prow.k8s.io/command-help
+# (OpenShift CI is Prow-based; your org may also document commands in repo or
+#  https://docs.ci.openshift.org/ — use whatever your team links in PR checks.)
+#
+# Details:
+# - Needs approval from an approver in each of these files: OWNERS (and any
+#   other OWNERS that cover paths touched by the PR, per directory hierarchy).
+# - Approvers can indicate their approval by writing /approve in a comment.
+# - Approvers can cancel approval by writing /approve cancel in a comment.
+# -----------------------------------------------------------------------------
+
+approvers:
+  - midu16
+  - mvazquezc
+
+reviewers:
+  - midu16
+  - mvazquezc
