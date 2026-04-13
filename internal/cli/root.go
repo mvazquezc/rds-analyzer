@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/openshift-kni/rds-analyzer/internal/analyzer"
+	"github.com/openshift-kni/rds-analyzer/internal/rules"
 	"github.com/openshift-kni/rds-analyzer/internal/types"
 	"github.com/spf13/cobra"
 )
@@ -21,11 +22,12 @@ var (
 
 // Command-line flags.
 var (
-	outputFormat  string
-	outputMode    string
-	targetVersion string
-	inputFile     string
-	rulesFile     string
+	outputFormat      string
+	outputMode        string
+	targetVersion     string
+	inputFile         string
+	rulesFile         string
+	validateRulesOnly bool
 )
 
 // rootCmd represents the base command.
@@ -37,6 +39,9 @@ var rootCmd = &cobra.Command{
 Examples:
   # Analyze from stdin with text output and using custom rules file
   cat results.json | rds-analyzer -r /path/to/custom-rules.yaml
+
+  # Validate rules only (all regex/value_regex patterns); no input JSON required
+  rds-analyzer -r ran-du-rules.yaml --validate-rules-only
 
   # Analyze from file with HTML output (using default rules file ./rules.yaml)
   rds-analyzer -i results.json -o html > report.html
@@ -69,7 +74,9 @@ func init() {
 	rootCmd.Flags().StringVarP(&inputFile, "input", "i", "",
 		"Input file path (reads from stdin if not specified)")
 	rootCmd.Flags().StringVarP(&rulesFile, "rules", "r", "./rules.yaml",
-		"Path to rules.yaml file")
+		"Path to rules YAML file")
+	rootCmd.Flags().BoolVar(&validateRulesOnly, "validate-rules-only", false,
+		"Load rules YAML, validate all regexp patterns, and exit. Does not read input JSON (do not use with -i).")
 
 	rootCmd.Version = fmt.Sprintf("%s (commit: %s, built: %s)", Version, Commit, BuildDate)
 }
@@ -80,14 +87,23 @@ func runAnalysis(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	validationReport, err := loadValidationReport()
-	if err != nil {
-		return err
+	if validateRulesOnly {
+		// Regexp checks only (validateRegexPatternsFromYAML via rules.ValidateRulesRegexpPatterns); no full engine build.
+		if err := rules.ValidateRulesRegexpPatterns(rulesFile); err != nil {
+			return fmt.Errorf("failed to initialize rule engine: %w", err)
+		}
+		fmt.Fprintf(os.Stdout, "Rules validation passed: all regexp patterns are valid in %s\n", rulesFile)
+		return nil
 	}
 
 	a, err := analyzer.New(rulesFile, targetVersion)
 	if err != nil {
 		return err
+	}
+
+	validationReport, err := loadValidationReport()
+	if err != nil {
+		return fmt.Errorf("rules loaded successfully; failed to read input JSON: %w", err)
 	}
 
 	return a.Analyze(os.Stdout, validationReport, outputFormat, outputMode)
@@ -103,6 +119,10 @@ func validateFlags() error {
 		return fmt.Errorf("invalid output mode %q: must be 'simple' or 'reporting'", outputMode)
 	}
 
+	if validateRulesOnly && inputFile != "" {
+		return fmt.Errorf("--validate-rules-only cannot be combined with -i")
+	}
+
 	return nil
 }
 
@@ -112,7 +132,7 @@ func loadValidationReport() (types.ValidationReport, error) {
 
 	inputData, err := readInput()
 	if err != nil {
-		return report, fmt.Errorf("failed to read input: %w", err)
+		return report, err
 	}
 
 	if len(inputData) == 0 {

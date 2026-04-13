@@ -22,15 +22,42 @@ internal/
 
 ### Data Flow
 
-1. CLI reads JSON input (file or stdin)
-2. JSON is parsed into `types.ValidationReport`
+1. CLI loads rules YAML (`-r`). For a full run, `analyzer.New` calls `rules.ValidateRulesRegexpPatterns` (which walks the YAML AST with `validateRegexPatternsFromYAML`), then builds `rules.Engine`. With **`--validate-rules-only`**, the CLI calls `rules.ValidateRulesRegexpPatterns` only and exits without building an engine or reading input JSON. On regexp failure, the process exits before reading input.
+2. CLI reads JSON input (file or stdin) into `types.ValidationReport`
 3. `analyzer.Analyzer` orchestrates processing:
-   - Loads rules via `rules.Engine`
+   - Uses the loaded `rules.Engine`
    - Passes report to appropriate generator
 4. Report generator:
    - Uses `parser` to transform diffs
    - Uses `rules.Engine` to evaluate each diff
    - Outputs formatted results
+
+### Regex Validation
+
+All regex patterns in rule files are validated by `rules.ValidateRulesRegexpPatterns` (YAML regexp walk). `analyzer.New` invokes it before constructing the engine for normal analysis. The **`--validate-rules-only`** path runs the same validation from `internal/cli` without loading the full analyzer. This includes:
+- `regex` patterns in condition rules (global_rules, rules)
+- `value_regex` patterns in label_annotation_rules
+
+If any pattern fails `regexp.Compile`, the CLI exits with a non-zero status and prints `rules.RegexValidationError` to stderr **before** reading the input JSON or running analysis.
+
+Use **`--validate-rules-only`** to load rules and exit after regexp validation (no `-i` required). Example: `./rds-analyzer -r ran-du-rules.yaml --validate-rules-only`
+
+The error lists:
+- The rule file name where the invalid pattern was found
+- The rule ID and condition index (or label/annotation index)
+- The invalid regex pattern
+- The specific error from Go's regexp parser
+
+Example (stderr):
+```
+Error: failed to initialize rule engine: invalid regex pattern(s) in rules file(s):
+
+  1. [hub-rules.yaml] line 42: rule "R003" condition[0]: invalid regex "[unclosed" - error parsing regexp: ...
+
+Fix these patterns before running analysis.
+```
+
+Each line includes the **1-based source line** in that rules file where the `regex` or `value_regex` scalar appears (from the YAML parser).
 
 ## Code Conventions
 
@@ -918,18 +945,24 @@ After writing rules, verify they work correctly:
    python3 -c "import yaml; yaml.safe_load(open('rules.yaml'))"
    ```
 
-2. **Run the analyzer with test data:**
+2. **Validate regex patterns:**
+   The analyzer validates every `regex` / `value_regex` when loading rules. Invalid patterns cause immediate exit (exit code 1) with a detailed message; analysis does not run.
+   ```bash
+   echo '{"Diffs":[]}' | ./rds-analyzer -r rules.yaml
+   ```
+
+3. **Run the analyzer with test data:**
    ```bash
    ./rds-analyzer -r rules.yaml -i testdata/output.json
    ```
 
-3. **Test specific OCP versions:**
+4. **Test specific OCP versions:**
    ```bash
    ./rds-analyzer -r rules.yaml -i testdata/output.json --ocp-version 4.20
    ./rds-analyzer -r rules.yaml -i testdata/output.json --ocp-version 4.18
    ```
 
-4. **Verify expected impacts:**
+5. **Verify expected impacts:**
    - Check that critical issues show as `Impacting`
    - Check that acceptable variations show as `NotADeviation`
    - Check that ambiguous cases show as `NeedsReview`

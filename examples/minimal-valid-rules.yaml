@@ -1,0 +1,62 @@
+# Intentionally INVALID regexp patterns for rds-analyzer validation demos (--validate-rules-only exits 1).
+# (Despite the filename, this file is not valid for analysis until patterns are fixed.)
+#
+#   ./build/rds-analyzer -r examples/minimal-valid-rules.yaml --validate-rules-only
+#
+# For valid rules, use examples/example-ran-du-rules.yaml
+
+version: "1.0"
+description: "Demo rules with deliberate regexp compile errors (moved from example-ran-du-rules.yaml)"
+
+settings:
+  default_impact: "NeedsReview"
+  default_severity: "MEDIUM"
+
+label_annotation_rules:
+  labels:
+    # Looks like a semver or release channel matcher; (?P<channel> ... ) is not closed.
+    - key: "example.com/release-channel"
+      value_regex: '^(?P<channel>stable|fast|candidate-[0-9]+\.[0-9]+'
+      description: "Demo: invalid value_regex (unclosed named group)"
+      impact:
+        4.20: NotADeviation
+
+  annotations:
+    # Looks like a duration; the outer non-capturing group is not closed.
+    - key: "example.com/refresh-interval"
+      value_regex: '^(?:[1-9][0-9]*h|[1-5]?[0-9]m'
+      description: "Demo: invalid value_regex (unclosed (?: ... ))"
+      impact:
+        4.20: NotADeviation
+
+  default_impact: "NotADeviation"
+  default_comment: "Labels and annotations are acceptable"
+
+global_rules:
+  - id: "EXAMPLE-INVALID-GLOBAL"
+    description: "Demo: invalid condition regex on global_rules path"
+    match: {}
+    conditions:
+      - type: "Any"
+        # Looks like matching diff keywords; alternation group is not closed.
+        regex: '^(?:FoundNotExpected|ExpectedNotFound|ExpectedFound|'
+        impact:
+          4.20: NotADeviation
+        comment: "incomplete (?: ... )"
+
+rules:
+  - id: "EXAMPLE-INVALID-RULE"
+    description: "Demo: invalid condition regex on rules path (YAML-style interval)"
+    match:
+      templateFileName: "Example.yaml"
+      crName: "example.io/v1_Example_ns_demo"
+
+    conditions:
+      - type: "ExpectedFound"
+        # Resembles a catalog/registry poll interval line; final `)` for `(?:` is missing.
+        regex: '^\s*registryPoll:\s*\n\s*interval:\s*(?:([6-9]\d|[1-9]\d{2,})m|([1-9]\d*)h'
+        impact:
+          4.20: NotADeviation
+        comment: "missing closing ) for non-capturing group"
+
+count_rules: []

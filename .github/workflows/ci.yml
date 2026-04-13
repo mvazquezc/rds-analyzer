@@ -92,6 +92,26 @@ jobs:
       - name: Verify binary works
         run: build/rds-analyzer --version
 
+      - name: Regexp validation fails on intentionally invalid rules (structured error)
+        run: |
+          set +e
+          out=$(build/rds-analyzer -r examples/minimal-valid-rules.yaml --validate-rules-only 2>&1)
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "Expected non-zero exit for invalid rules; got 0. Output:"
+            echo "$out"
+            exit 1
+          fi
+          want='Error: failed to initialize rule engine: invalid regex pattern(s) in rules file(s):'
+          if ! printf '%s\n' "$out" | grep -Fq "$want"; then
+            echo "Expected output to contain:"
+            echo "$want"
+            echo "--- actual output ---"
+            echo "$out"
+            exit 1
+          fi
+
       - name: Run analysis with example data for RAN DU
         run: |
           build/rds-analyzer \

@@ -27,17 +27,34 @@ func NewEngine(rulesFile string) (*Engine, error) {
 	return NewEngineWithVersion(rulesFile, "")
 }
 
+// ValidateRulesRegexpPatterns reads rulesFile, parses YAML, and validates every regex and
+// value_regex with regexp.Compile via validateRegexPatternsFromYAML. It returns *RegexValidationError if any pattern is invalid.
+func ValidateRulesRegexpPatterns(rulesFile string) error {
+	data, err := os.ReadFile(rulesFile)
+	if err != nil {
+		return fmt.Errorf("failed to read rules file: %w", err)
+	}
+	var config RulesConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse rules YAML %q: %w", rulesFile, err)
+	}
+	if warnings := validateRegexPatternsFromYAML(data, rulesFile); len(warnings) > 0 {
+		return &RegexValidationError{Warnings: warnings}
+	}
+	return nil
+}
+
 // NewEngineWithVersion creates a new rule engine with a specific target OCP version.
 // If version is empty, it defaults to the highest version defined in the rules.
+// Call ValidateRulesRegexpPatterns first if regexp patterns must be checked before init.
 func NewEngineWithVersion(rulesFile, version string) (*Engine, error) {
 	data, err := os.ReadFile(rulesFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read rules file: %w", err)
 	}
-
 	var config RulesConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse rules YAML: %w", err)
+		return nil, fmt.Errorf("failed to parse rules YAML %q: %w", rulesFile, err)
 	}
 
 	engine := &Engine{config: config}
