@@ -5,7 +5,7 @@ package parser
 import (
 	"strings"
 
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // ANSI color codes for terminal output formatting.

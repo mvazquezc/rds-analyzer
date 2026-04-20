@@ -7,9 +7,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/openshift-kni/rds-analyzer/internal/analyzer"
-	"github.com/openshift-kni/rds-analyzer/internal/rules"
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/analyzer"
+	"github.com/openshift-kni/rds-analyzer/pkg/rules"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 	"github.com/spf13/cobra"
 )
 

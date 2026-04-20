@@ -3,7 +3,7 @@ package parser
 import (
 	"testing"
 
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 func TestParseKeyValue(t *testing.T) {

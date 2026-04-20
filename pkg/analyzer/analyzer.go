@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/openshift-kni/rds-analyzer/internal/report"
-	"github.com/openshift-kni/rds-analyzer/internal/rules"
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/report"
+	"github.com/openshift-kni/rds-analyzer/pkg/rules"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // Analyzer orchestrates the RDS validation analysis.
@@ -24,6 +24,22 @@ func New(rulesFile string, version string) (*Analyzer, error) {
 		return nil, fmt.Errorf("failed to initialize rule engine: %w", err)
 	}
 	engine, err := rules.NewEngineWithVersion(rulesFile, version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize rule engine: %w", err)
+	}
+
+	return &Analyzer{ruleEngine: engine}, nil
+}
+
+// NewFromBytes creates a new Analyzer with rules loaded from in-memory YAML bytes.
+// This allows creating an analyzer from rules data fetched from a ConfigMap or other
+// in-memory source instead of a file path.
+// If version is non-empty, rules are evaluated against that OCP version.
+func NewFromBytes(rulesData []byte, version string) (*Analyzer, error) {
+	if err := rules.ValidateRulesRegexpPatternsFromBytes(rulesData, "rules"); err != nil {
+		return nil, fmt.Errorf("failed to initialize rule engine: %w", err)
+	}
+	engine, err := rules.NewEngineFromBytes(rulesData, version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize rule engine: %w", err)
 	}

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openshift-kni/rds-analyzer/internal/parser"
-	"github.com/openshift-kni/rds-analyzer/internal/rules"
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/parser"
+	"github.com/openshift-kni/rds-analyzer/pkg/rules"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // escapeHTML escapes characters that could break HTML structure.
