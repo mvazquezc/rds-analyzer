@@ -10,7 +10,7 @@ RDS Analyzer is a Go CLI tool and library that evaluates kube-compare JSON repor
 
 ### Package Structure
 
-```
+```text
 pkg/                 # Public library API - importable by external Go modules
 ├── analyzer/    # Orchestration - coordinates rule engine and report generation
 ├── parser/      # Diff parsing - transforms unified diff to structured data
@@ -35,7 +35,7 @@ internal/
 
 ### Regex Validation
 
-All regex patterns in rule files are validated by `rules.ValidateRulesRegexpPatterns` (YAML regexp walk). `analyzer.New` invokes it before constructing the engine for normal analysis. The **`--validate-rules-only`** path runs the same validation from the CLI without loading the full analyzer. This includes:
+All regex patterns in rule files are validated by `rules.ValidateRulesRegexpPatterns` (YAML regex walk). `analyzer.New` invokes it before constructing the engine for normal analysis. The **`--validate-rules-only`** path runs the same validation from the CLI without loading the full analyzer. This includes:
 - `regex` patterns in condition rules (global_rules, rules)
 - `value_regex` patterns in label_annotation_rules
 

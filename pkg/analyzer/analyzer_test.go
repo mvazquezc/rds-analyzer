@@ -258,42 +258,8 @@ func TestAnalyze_EmptyReport(t *testing.T) {
 	}
 }
 
-func TestNewFromBytes_ValidRules(t *testing.T) {
-	a, err := NewFromBytes([]byte(testRulesYAML), "")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if a == nil {
-		t.Fatal("expected analyzer, got nil")
-	}
-}
-
-func TestNewFromBytes_WithVersion(t *testing.T) {
-	a, err := NewFromBytes([]byte(testRulesYAML), "4.19")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if a.GetTargetVersion() != "4.19" {
-		t.Errorf("expected version 4.19, got %s", a.GetTargetVersion())
-	}
-}
-
-func TestNewFromBytes_InvalidYAML(t *testing.T) {
-	_, err := NewFromBytes([]byte("not: [valid: yaml"), "")
-	if err == nil {
-		t.Fatal("expected error for invalid YAML, got nil")
-	}
-}
-
-func TestNewFromBytes_InvalidVersion(t *testing.T) {
-	_, err := NewFromBytes([]byte(testRulesYAML), "invalid")
-	if err == nil {
-		t.Fatal("expected error for invalid version, got nil")
-	}
-}
-
-func TestNewFromBytes_InvalidRegex(t *testing.T) {
-	invalidRules := `
+func TestNewFromBytes_TableCases(t *testing.T) {
+	invalidRegexRules := `
 version: "1.0"
 settings:
   default_impact: "NeedsReview"
@@ -306,12 +272,65 @@ rules:
         impact: "Impacting"
         comment: "bad regex"
 `
-	_, err := NewFromBytes([]byte(invalidRules), "")
-	if err == nil {
-		t.Fatal("expected error for invalid regex, got nil")
+	tests := []struct {
+		name        string
+		rulesData   []byte
+		version     string
+		wantErr     bool
+		errContains string
+		wantVersion string
+	}{
+		{
+			name:      "valid rules",
+			rulesData: []byte(testRulesYAML),
+		},
+		{
+			name:        "with version",
+			rulesData:   []byte(testRulesYAML),
+			version:     "4.19",
+			wantVersion: "4.19",
+		},
+		{
+			name:      "invalid YAML",
+			rulesData: []byte("not: [valid: yaml"),
+			wantErr:   true,
+		},
+		{
+			name:      "invalid version",
+			rulesData: []byte(testRulesYAML),
+			version:   "invalid",
+			wantErr:   true,
+		},
+		{
+			name:        "invalid regex",
+			rulesData:   []byte(invalidRegexRules),
+			wantErr:     true,
+			errContains: "failed to initialize rule engine",
+		},
 	}
-	if !strings.Contains(err.Error(), "failed to initialize rule engine") {
-		t.Errorf("expected rule engine error, got: %v", err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analyzer, err := NewFromBytes(tt.rulesData, tt.version)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if analyzer == nil {
+				t.Fatal("expected analyzer, got nil")
+			}
+			if tt.wantVersion != "" && analyzer.GetTargetVersion() != tt.wantVersion {
+				t.Errorf("expected version %s, got %s", tt.wantVersion, analyzer.GetTargetVersion())
+			}
+		})
 	}
 }
 
@@ -355,57 +374,60 @@ func TestNewFromBytes_ProducesSameOutputAsNew(t *testing.T) {
 	}
 }
 
-func TestNewFromBytes_HTMLFormat(t *testing.T) {
-	a, err := NewFromBytes([]byte(testRulesYAML), "")
-	if err != nil {
-		t.Fatalf("Failed to create analyzer: %v", err)
-	}
-
-	report := types.ValidationReport{
-		Summary: types.Summary{NumDiffCRs: 1, TotalCRs: 5},
-		Diffs: []types.Diff{
-			{
-				DiffOutput:         "-  value: old\n+  value: new",
-				CorrelatedTemplate: "test/TestCR.yaml",
-				CRName:             "v1_ConfigMap_default_test",
+func TestNewFromBytes_AnalyzeModes(t *testing.T) {
+	tests := []struct {
+		name        string
+		format      string
+		mode        string
+		checkOutput func(t *testing.T, output string)
+	}{
+		{
+			name:   "HTML format",
+			format: "html",
+			mode:   "simple",
+			checkOutput: func(t *testing.T, output string) {
+				if !strings.Contains(output, "<!DOCTYPE html>") {
+					t.Error("expected HTML output")
+				}
+			},
+		},
+		{
+			name:   "reporting mode",
+			format: "text",
+			mode:   "reporting",
+			checkOutput: func(t *testing.T, output string) {
+				if output == "" {
+					t.Error("expected non-empty output for reporting mode")
+				}
 			},
 		},
 	}
 
-	var buf bytes.Buffer
-	if err := a.Analyze(&buf, report, "html", "simple"); err != nil {
-		t.Fatalf("Analyze failed: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analyzer, err := NewFromBytes([]byte(testRulesYAML), "")
+			if err != nil {
+				t.Fatalf("Failed to create analyzer: %v", err)
+			}
 
-	if !strings.Contains(buf.String(), "<!DOCTYPE html>") {
-		t.Error("expected HTML output")
-	}
-}
+			report := types.ValidationReport{
+				Summary: types.Summary{NumDiffCRs: 1, TotalCRs: 5},
+				Diffs: []types.Diff{
+					{
+						DiffOutput:         "-  value: old\n+  value: new",
+						CorrelatedTemplate: "test/TestCR.yaml",
+						CRName:             "v1_ConfigMap_default_test",
+					},
+				},
+			}
 
-func TestNewFromBytes_ReportingMode(t *testing.T) {
-	a, err := NewFromBytes([]byte(testRulesYAML), "")
-	if err != nil {
-		t.Fatalf("Failed to create analyzer: %v", err)
-	}
+			var buf bytes.Buffer
+			if err := analyzer.Analyze(&buf, report, tt.format, tt.mode); err != nil {
+				t.Fatalf("Analyze failed: %v", err)
+			}
 
-	report := types.ValidationReport{
-		Summary: types.Summary{NumDiffCRs: 1, TotalCRs: 5},
-		Diffs: []types.Diff{
-			{
-				DiffOutput:         "-  config: expected\n+  config: found",
-				CorrelatedTemplate: "test/TestCR.yaml",
-				CRName:             "v1_ConfigMap_default_test",
-			},
-		},
-	}
-
-	var buf bytes.Buffer
-	if err := a.Analyze(&buf, report, "text", "reporting"); err != nil {
-		t.Fatalf("Analyze failed: %v", err)
-	}
-
-	if buf.String() == "" {
-		t.Error("expected non-empty output for reporting mode")
+			tt.checkOutput(t, buf.String())
+		})
 	}
 }
 

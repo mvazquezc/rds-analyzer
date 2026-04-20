@@ -7,9 +7,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/openshift-kni/rds-analyzer/pkg/types"
-
 	"gopkg.in/yaml.v3"
+
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // Engine manages rule loading and evaluation against validation diffs.
@@ -59,7 +59,11 @@ func NewEngineWithVersion(rulesFile, version string) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read rules file: %w", err)
 	}
-	return NewEngineFromBytes(data, version)
+	engine, err := NewEngineFromBytes(data, version)
+	if err != nil {
+		return nil, fmt.Errorf("rules file %s: %w", rulesFile, err)
+	}
+	return engine, nil
 }
 
 // NewEngineFromBytes creates a new rule engine from in-memory YAML bytes.
