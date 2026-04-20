@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // testRulesYAML contains a minimal rules configuration for testing.
@@ -2784,6 +2784,142 @@ func TestEvaluateMissingCRs_PathKeyMatching(t *testing.T) {
 	if result2.IsSatisfied {
 		t.Error("Expected optional/ptp-alt/config.yaml to NOT be satisfied (different parent dir)")
 	}
+}
+
+// TestNewEngineFromBytes verifies creating an engine from in-memory YAML bytes.
+func TestNewEngineFromBytes(t *testing.T) {
+	t.Run("valid rules bytes", func(t *testing.T) {
+		engine, err := NewEngineFromBytes([]byte(testRulesYAML), "4.20")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if engine == nil {
+			t.Fatal("expected engine, got nil")
+		}
+		if engine.GetTargetVersion().String() != "4.20" {
+			t.Errorf("expected version 4.20, got %s", engine.GetTargetVersion().String())
+		}
+	})
+
+	t.Run("valid rules bytes without version", func(t *testing.T) {
+		engine, err := NewEngineFromBytes([]byte(testRulesYAML), "")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if engine == nil {
+			t.Fatal("expected engine, got nil")
+		}
+	})
+
+	t.Run("invalid YAML", func(t *testing.T) {
+		_, err := NewEngineFromBytes([]byte("not: [valid: yaml"), "4.20")
+		if err == nil {
+			t.Fatal("expected error for invalid YAML, got nil")
+		}
+	})
+
+	t.Run("invalid version", func(t *testing.T) {
+		_, err := NewEngineFromBytes([]byte(testRulesYAML), "invalid")
+		if err == nil {
+			t.Fatal("expected error for invalid version, got nil")
+		}
+	})
+
+	t.Run("produces same results as file-based engine", func(t *testing.T) {
+		rulesPath := createTestRulesFile(t)
+		fileEngine, err := NewEngine(rulesPath)
+		if err != nil {
+			t.Fatalf("Failed to create file engine: %v", err)
+		}
+
+		bytesEngine, err := NewEngineFromBytes([]byte(testRulesYAML), "")
+		if err != nil {
+			t.Fatalf("Failed to create bytes engine: %v", err)
+		}
+
+		diffCheck := types.DiffCheck{
+			CRName:           "operator.openshift.io/v1_Network_cluster",
+			TemplateFileName: "DisableSnoNetworkDiag.yaml",
+			FoundValue:       []string{"disableNetworkDiagnostics: false"},
+		}
+
+		fileResult := fileEngine.Evaluate(diffCheck)
+		bytesResult := bytesEngine.Evaluate(diffCheck)
+
+		if fileResult.Impact != bytesResult.Impact {
+			t.Errorf("impact mismatch: file=%q, bytes=%q", fileResult.Impact, bytesResult.Impact)
+		}
+		if fileResult.Matched != bytesResult.Matched {
+			t.Errorf("matched mismatch: file=%v, bytes=%v", fileResult.Matched, bytesResult.Matched)
+		}
+	})
+}
+
+// TestValidateRulesRegexpPatternsFromBytes verifies regex validation from in-memory bytes.
+func TestValidateRulesRegexpPatternsFromBytes(t *testing.T) {
+	t.Run("valid patterns", func(t *testing.T) {
+		err := ValidateRulesRegexpPatternsFromBytes([]byte(testRulesYAML), "test-rules")
+		if err != nil {
+			t.Fatalf("expected no error for valid patterns, got %v", err)
+		}
+	})
+
+	t.Run("invalid regex pattern", func(t *testing.T) {
+		invalidRules := `
+version: "1.0"
+settings:
+  default_impact: "NeedsReview"
+rules:
+  - id: "bad-rule"
+    match: {}
+    conditions:
+      - type: "Any"
+        regex: "[unclosed"
+        impact: "Impacting"
+        comment: "bad regex"
+`
+		err := ValidateRulesRegexpPatternsFromBytes([]byte(invalidRules), "bad-rules.yaml")
+		if err == nil {
+			t.Fatal("expected error for invalid regex, got nil")
+		}
+		var regexErr *RegexValidationError
+		if !errors.As(err, &regexErr) {
+			t.Fatalf("expected RegexValidationError, got %T: %v", err, err)
+		}
+		if len(regexErr.Warnings) == 0 {
+			t.Error("expected at least one warning")
+		}
+	})
+
+	t.Run("invalid YAML", func(t *testing.T) {
+		err := ValidateRulesRegexpPatternsFromBytes([]byte("not: [valid: yaml"), "bad.yaml")
+		if err == nil {
+			t.Fatal("expected error for invalid YAML, got nil")
+		}
+	})
+
+	t.Run("sourceName appears in error messages", func(t *testing.T) {
+		invalidRules := `
+version: "1.0"
+settings:
+  default_impact: "NeedsReview"
+rules:
+  - id: "bad-rule"
+    match: {}
+    conditions:
+      - type: "Any"
+        regex: "[unclosed"
+        impact: "Impacting"
+        comment: "test"
+`
+		err := ValidateRulesRegexpPatternsFromBytes([]byte(invalidRules), "my-configmap-key.yaml")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "my-configmap-key.yaml") {
+			t.Errorf("expected source name in error, got: %v", err)
+		}
+	})
 }
 
 // TestLabelAnnotationValueDifferences verifies that labels/annotations with value

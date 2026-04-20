@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openshift-kni/rds-analyzer/internal/rules"
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/rules"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // testRulesYAML contains a minimal rules configuration for testing.

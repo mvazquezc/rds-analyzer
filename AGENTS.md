@@ -4,25 +4,26 @@ This document provides guidelines for AI agents working with the RDS Analyzer co
 
 ## Project Overview
 
-RDS Analyzer is a Go CLI tool that evaluates evaluates kube-compare JSON reports against a set of rules. It determines the impact of configuration deviations and generates text or HTML reports.
+RDS Analyzer is a Go CLI tool and library that evaluates kube-compare JSON reports against a set of rules. It determines the impact of configuration deviations and generates text or HTML reports.
 
 ## Architecture
 
 ### Package Structure
 
-```
-internal/
+```text
+pkg/                 # Public library API - importable by external Go modules
 ├── analyzer/    # Orchestration - coordinates rule engine and report generation
-├── cli/         # Cobra CLI - command parsing and flag handling
 ├── parser/      # Diff parsing - transforms unified diff to structured data
 ├── report/      # Output generators - text (terminal) and HTML formats
 ├── rules/       # Rule engine - pattern matching and impact resolution
 └── types/       # Data structures - shared types for validation reports
+internal/
+└── cli/         # Cobra CLI - command parsing and flag handling (not importable)
 ```
 
 ### Data Flow
 
-1. CLI loads rules YAML (`-r`). For a full run, `analyzer.New` calls `rules.ValidateRulesRegexpPatterns` (which walks the YAML AST with `validateRegexPatternsFromYAML`), then builds `rules.Engine`. With **`--validate-rules-only`**, the CLI calls `rules.ValidateRulesRegexpPatterns` only and exits without building an engine or reading input JSON. On regexp failure, the process exits before reading input.
+1. CLI loads rules YAML (`-r`). For a full run, `analyzer.New` calls `rules.ValidateRulesRegexpPatterns` (which walks the YAML AST with `validateRegexPatternsFromYAML`), then builds `rules.Engine`. With **`--validate-rules-only`**, the CLI calls `rules.ValidateRulesRegexpPatterns` only and exits without building an engine or reading input JSON. On regexp failure, the process exits before reading input. For library usage, `analyzer.NewFromBytes` accepts in-memory YAML rules bytes instead of a file path.
 2. CLI reads JSON input (file or stdin) into `types.ValidationReport`
 3. `analyzer.Analyzer` orchestrates processing:
    - Uses the loaded `rules.Engine`
@@ -34,7 +35,7 @@ internal/
 
 ### Regex Validation
 
-All regex patterns in rule files are validated by `rules.ValidateRulesRegexpPatterns` (YAML regexp walk). `analyzer.New` invokes it before constructing the engine for normal analysis. The **`--validate-rules-only`** path runs the same validation from `internal/cli` without loading the full analyzer. This includes:
+All regex patterns in rule files are validated by `rules.ValidateRulesRegexpPatterns` (YAML regex walk). `analyzer.New` invokes it before constructing the engine for normal analysis. The **`--validate-rules-only`** path runs the same validation from the CLI without loading the full analyzer. This includes:
 - `regex` patterns in condition rules (global_rules, rules)
 - `value_regex` patterns in label_annotation_rules
 
@@ -92,7 +93,7 @@ import (
     "github.com/spf13/cobra"
 
     // Internal packages
-    "github.com/telco-operations/rds-analyzer/internal/types"
+    "github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 ```
 
@@ -107,20 +108,20 @@ import (
 
 ### Adding a New Rule Condition Type
 
-1. Define in `internal/rules/types.go` (add to Condition.Type options)
-2. Handle in `internal/rules/engine.go`:
+1. Define in `pkg/rules/types.go` (add to Condition.Type options)
+2. Handle in `pkg/rules/engine.go`:
    - Add case in `evaluateCondition()`
    - Implement matching logic
-3. **Add tests in `internal/rules/engine_test.go`**:
+3. **Add tests in `pkg/rules/engine_test.go`**:
    - Add test cases to `TestConditionTypes` for the new condition type
    - Add example rules using the new type to `testRulesYAML` constant
    - Add realistic scenarios to `TestEvaluate` or `TestEvaluateFromOutputJSON`
 
 ### Adding a New Rule Type (e.g., Count Rules, Label Rules)
 
-1. Define types in `internal/rules/types.go`
-2. Implement evaluation in `internal/rules/engine.go`
-3. **Add comprehensive tests in `internal/rules/engine_test.go`**:
+1. Define types in `pkg/rules/types.go`
+2. Implement evaluation in `pkg/rules/engine.go`
+3. **Add comprehensive tests in `pkg/rules/engine_test.go`**:
    - Create a dedicated test function (e.g., `TestEvaluateNewRuleType`)
    - Add the new rule type to `testRulesYAML` constant
    - Test edge cases (empty input, no match, multiple matches)
@@ -128,14 +129,14 @@ import (
 
 ### Adding a New Output Format
 
-1. Create `internal/report/newformat.go`
+1. Create `pkg/report/newformat.go`
 2. Implement generator with `Generate(io.Writer, types.ValidationReport) error`
-3. Add case in `internal/analyzer/analyzer.go`
+3. Add case in `pkg/analyzer/analyzer.go`
 4. Add CLI option in `internal/cli/root.go`
 
 ### Modifying the HTML Template
 
-The HTML template is embedded in `internal/report/html.go` as the `htmlTemplate` constant. Edit directly; Go will include it at build time.
+The HTML template is embedded in `pkg/report/html.go` as the `htmlTemplate` constant. Edit directly; Go will include it at build time.
 
 ## Testing Guidelines
 
@@ -146,7 +147,7 @@ The HTML template is embedded in `internal/report/html.go` as the `htmlTemplate`
 - Use table-driven tests for multiple cases
 - Name test functions `TestFunctionName_Scenario`
 
-### Rules Engine Tests (`internal/rules/engine_test.go`)
+### Rules Engine Tests (`pkg/rules/engine_test.go`)
 
 The engine test file contains comprehensive tests for the rule evaluation system. When adding new rules or rule types, update this file:
 
@@ -283,7 +284,7 @@ Before submitting changes:
 - [ ] Errors are wrapped with context
 - [ ] No hardcoded paths or values
 - [ ] **New rule types have corresponding tests in `engine_test.go`**
-- [ ] **Test coverage remains above 80%** (`go test -cover ./internal/rules/...`)
+- [ ] **Test coverage remains above 80%** (`go test -cover ./pkg/rules/...`)
 
 ---
 

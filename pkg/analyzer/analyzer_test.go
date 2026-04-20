@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openshift-kni/rds-analyzer/internal/types"
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // testRulesYAML contains a minimal rules configuration for testing.
@@ -255,6 +255,179 @@ func TestAnalyze_EmptyReport(t *testing.T) {
 	err = a.Analyze(&buf, report, "text", "simple")
 	if err != nil {
 		t.Fatalf("Analyze should handle empty report: %v", err)
+	}
+}
+
+func TestNewFromBytes_TableCases(t *testing.T) {
+	invalidRegexRules := `
+version: "1.0"
+settings:
+  default_impact: "NeedsReview"
+rules:
+  - id: "bad-rule"
+    match: {}
+    conditions:
+      - type: "Any"
+        regex: "[unclosed"
+        impact: "Impacting"
+        comment: "bad regex"
+`
+	tests := []struct {
+		name        string
+		rulesData   []byte
+		version     string
+		wantErr     bool
+		errContains string
+		wantVersion string
+	}{
+		{
+			name:      "valid rules",
+			rulesData: []byte(testRulesYAML),
+		},
+		{
+			name:        "with version",
+			rulesData:   []byte(testRulesYAML),
+			version:     "4.19",
+			wantVersion: "4.19",
+		},
+		{
+			name:      "invalid YAML",
+			rulesData: []byte("not: [valid: yaml"),
+			wantErr:   true,
+		},
+		{
+			name:      "invalid version",
+			rulesData: []byte(testRulesYAML),
+			version:   "invalid",
+			wantErr:   true,
+		},
+		{
+			name:        "invalid regex",
+			rulesData:   []byte(invalidRegexRules),
+			wantErr:     true,
+			errContains: "failed to initialize rule engine",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analyzer, err := NewFromBytes(tt.rulesData, tt.version)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if analyzer == nil {
+				t.Fatal("expected analyzer, got nil")
+			}
+			if tt.wantVersion != "" && analyzer.GetTargetVersion() != tt.wantVersion {
+				t.Errorf("expected version %s, got %s", tt.wantVersion, analyzer.GetTargetVersion())
+			}
+		})
+	}
+}
+
+func TestNewFromBytes_ProducesSameOutputAsNew(t *testing.T) {
+	rulesFile := createTestRulesFile(t)
+
+	fileAnalyzer, err := New(rulesFile, "4.20")
+	if err != nil {
+		t.Fatalf("Failed to create file analyzer: %v", err)
+	}
+
+	bytesAnalyzer, err := NewFromBytes([]byte(testRulesYAML), "4.20")
+	if err != nil {
+		t.Fatalf("Failed to create bytes analyzer: %v", err)
+	}
+
+	report := types.ValidationReport{
+		Summary: types.Summary{
+			NumDiffCRs: 1,
+			TotalCRs:   5,
+		},
+		Diffs: []types.Diff{
+			{
+				DiffOutput:         "-  name: test\n+  name: changed",
+				CorrelatedTemplate: "test/TestCR.yaml",
+				CRName:             "v1_ConfigMap_default_test",
+			},
+		},
+	}
+
+	var fileBuf, bytesBuf bytes.Buffer
+	if err := fileAnalyzer.Analyze(&fileBuf, report, "text", "simple"); err != nil {
+		t.Fatalf("File analyzer failed: %v", err)
+	}
+	if err := bytesAnalyzer.Analyze(&bytesBuf, report, "text", "simple"); err != nil {
+		t.Fatalf("Bytes analyzer failed: %v", err)
+	}
+
+	if fileBuf.String() != bytesBuf.String() {
+		t.Error("file-based and bytes-based analyzers produced different output")
+	}
+}
+
+func TestNewFromBytes_AnalyzeModes(t *testing.T) {
+	tests := []struct {
+		name        string
+		format      string
+		mode        string
+		checkOutput func(t *testing.T, output string)
+	}{
+		{
+			name:   "HTML format",
+			format: "html",
+			mode:   "simple",
+			checkOutput: func(t *testing.T, output string) {
+				if !strings.Contains(output, "<!DOCTYPE html>") {
+					t.Error("expected HTML output")
+				}
+			},
+		},
+		{
+			name:   "reporting mode",
+			format: "text",
+			mode:   "reporting",
+			checkOutput: func(t *testing.T, output string) {
+				if output == "" {
+					t.Error("expected non-empty output for reporting mode")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analyzer, err := NewFromBytes([]byte(testRulesYAML), "")
+			if err != nil {
+				t.Fatalf("Failed to create analyzer: %v", err)
+			}
+
+			report := types.ValidationReport{
+				Summary: types.Summary{NumDiffCRs: 1, TotalCRs: 5},
+				Diffs: []types.Diff{
+					{
+						DiffOutput:         "-  value: old\n+  value: new",
+						CorrelatedTemplate: "test/TestCR.yaml",
+						CRName:             "v1_ConfigMap_default_test",
+					},
+				},
+			}
+
+			var buf bytes.Buffer
+			if err := analyzer.Analyze(&buf, report, tt.format, tt.mode); err != nil {
+				t.Fatalf("Analyze failed: %v", err)
+			}
+
+			tt.checkOutput(t, buf.String())
+		})
 	}
 }
 

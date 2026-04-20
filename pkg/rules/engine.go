@@ -7,9 +7,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/openshift-kni/rds-analyzer/internal/types"
-
 	"gopkg.in/yaml.v3"
+
+	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
 // Engine manages rule loading and evaluation against validation diffs.
@@ -34,11 +34,18 @@ func ValidateRulesRegexpPatterns(rulesFile string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read rules file: %w", err)
 	}
+	return ValidateRulesRegexpPatternsFromBytes(data, rulesFile)
+}
+
+// ValidateRulesRegexpPatternsFromBytes validates every regex and value_regex pattern
+// in in-memory YAML rules bytes. The sourceName is used in error messages to identify
+// the source of the rules (e.g., a file name or ConfigMap key).
+func ValidateRulesRegexpPatternsFromBytes(data []byte, sourceName string) error {
 	var config RulesConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return fmt.Errorf("failed to parse rules YAML %q: %w", rulesFile, err)
+		return fmt.Errorf("failed to parse rules YAML %q: %w", sourceName, err)
 	}
-	if warnings := validateRegexPatternsFromYAML(data, rulesFile); len(warnings) > 0 {
+	if warnings := validateRegexPatternsFromYAML(data, sourceName); len(warnings) > 0 {
 		return &RegexValidationError{Warnings: warnings}
 	}
 	return nil
@@ -52,9 +59,20 @@ func NewEngineWithVersion(rulesFile, version string) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read rules file: %w", err)
 	}
+	engine, err := NewEngineFromBytes(data, version)
+	if err != nil {
+		return nil, fmt.Errorf("rules file %s: %w", rulesFile, err)
+	}
+	return engine, nil
+}
+
+// NewEngineFromBytes creates a new rule engine from in-memory YAML bytes.
+// If version is empty, it defaults to the highest version defined in the rules.
+// Call ValidateRulesRegexpPatternsFromBytes first if regexp patterns must be checked before init.
+func NewEngineFromBytes(data []byte, version string) (*Engine, error) {
 	var config RulesConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse rules YAML %q: %w", rulesFile, err)
+		return nil, fmt.Errorf("failed to parse rules YAML: %w", err)
 	}
 
 	engine := &Engine{config: config}
