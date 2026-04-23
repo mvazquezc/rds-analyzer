@@ -119,7 +119,7 @@ func TestReportingGenerator_Generate(t *testing.T) {
 	}
 
 	// Verify section 1 header.
-	if !strings.Contains(output, "The following deviations must be addressed:") {
+	if !strings.Contains(output, "Section A: Deviations that MUST BE ADDRESSED") {
 		t.Error("Missing section 1 header")
 	}
 
@@ -134,7 +134,7 @@ func TestReportingGenerator_Generate(t *testing.T) {
 	}
 
 	// Verify section 2 header.
-	if !strings.Contains(output, "The following deviations require guidance from the telco team:") {
+	if !strings.Contains(output, "Section B: Deviations REQUIRING GUIDANCE from the telco team") {
 		t.Error("Missing section 2 header")
 	}
 
@@ -194,7 +194,7 @@ func TestReportingGenerator_EmptySections(t *testing.T) {
 
 	// Section 1 should not have "Missing required CRs" subsection.
 	// But section headers should still appear.
-	if !strings.Contains(output, "The following deviations must be addressed:") {
+	if !strings.Contains(output, "Section A: Deviations that MUST BE ADDRESSED") {
 		t.Error("Missing section 1 header")
 	}
 

@@ -102,7 +102,7 @@ func (g *ReportingGenerator) printSection1(
 	unmatchedCRs []string,
 ) {
 	fmt.Fprintln(g.writer, "==================================================")
-	fmt.Fprintln(g.writer, "The following deviations must be addressed:")
+	fmt.Fprintln(g.writer, "Section A: Deviations that MUST BE ADDRESSED")
 	fmt.Fprintln(g.writer, "==================================================")
 	fmt.Fprintln(g.writer)
 
@@ -148,7 +148,7 @@ func (g *ReportingGenerator) printSection2(
 	diffResults []reportingDiffResult,
 ) {
 	fmt.Fprintln(g.writer, "==================================================")
-	fmt.Fprintln(g.writer, "The following deviations require guidance from the telco team:")
+	fmt.Fprintln(g.writer, "Section B: Deviations REQUIRING GUIDANCE from the telco team")
 	fmt.Fprintln(g.writer, "==================================================")
 	fmt.Fprintln(g.writer)
 
