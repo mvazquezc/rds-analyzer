@@ -1,6 +1,7 @@
 package report
 
 import (
+	"html"
 	"html/template"
 	"io"
 	"path/filepath"
@@ -16,10 +17,7 @@ import (
 // escapeHTML escapes characters that could break HTML structure.
 // Returns template.HTML to prevent double-escaping by the template engine.
 func escapeHTML(s string) template.HTML {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	return template.HTML(s)
+	return template.HTML(html.EscapeString(s))
 }
 
 // HTMLReport contains all data needed to render the HTML report.
@@ -310,10 +308,7 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 	for _, d := range diffs {
 		// Handle empty diffs - add minimal DiffCheck for count rules only.
 		if d.DiffOutput == "" {
-			allDiffChecks = append(allDiffChecks, types.DiffCheck{
-				CRName:           d.CRName,
-				TemplateFileName: filepath.Base(d.CorrelatedTemplate),
-			})
+			allDiffChecks = append(allDiffChecks, minimalDiffCheck(d))
 			continue
 		}
 
@@ -447,25 +442,30 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 }
 
 func getMatchingRulesHTML(line, diffType string, ruleResult rules.EvaluationResult) []RuleTagData {
-	trimmedLine := strings.TrimSpace(line)
-	var ruleTags []RuleTagData
-	seen := make(map[string]bool)
+	ids := matchingRuleIDs(line, diffType, ruleResult)
+	if len(ids) == 0 {
+		return nil
+	}
 
+	// Build a lookup from rule ID to condition details.
+	condByID := make(map[string]rules.ConditionResult)
 	for _, condResult := range ruleResult.Conditions {
-		if condResult.ConditionType == diffType && condResult.Matched {
-			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
-			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
-				if !seen[condResult.RuleID] {
-					seen[condResult.RuleID] = true
-					ruleTags = append(ruleTags, RuleTagData{
-						ID:        condResult.RuleID,
-						Comment:   condResult.Comment,
-						Impact:    condResult.Impact,
-						ImpactCSS: getImpactCSS(condResult.Impact),
-					})
-				}
+		if condResult.Matched {
+			if _, exists := condByID[condResult.RuleID]; !exists {
+				condByID[condResult.RuleID] = condResult
 			}
 		}
+	}
+
+	var ruleTags []RuleTagData
+	for _, id := range ids {
+		cond := condByID[id]
+		ruleTags = append(ruleTags, RuleTagData{
+			ID:        id,
+			Comment:   cond.Comment,
+			Impact:    cond.Impact,
+			ImpactCSS: getImpactCSS(cond.Impact),
+		})
 	}
 	return ruleTags
 }

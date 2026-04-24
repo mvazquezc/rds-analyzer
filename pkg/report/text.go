@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,6 +14,26 @@ import (
 	"github.com/openshift-kni/rds-analyzer/pkg/rules"
 	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
+
+// ANSI color codes for terminal output formatting.
+const (
+	ColorReset  = "\033[0m"
+	ColorRed    = "\033[31m"
+	ColorGreen  = "\033[32m"
+	ColorYellow = "\033[33m"
+	ColorBlue   = "\033[34m"
+	ColorCyan   = "\033[36m"
+	ColorBold   = "\033[1m"
+	ColorDim    = "\033[2m"
+)
+
+// ansiRegex matches ANSI escape sequences for stripping from output.
+var ansiRegex = regexp.MustCompile(`\033\[[0-9;]*m`)
+
+// stripANSI removes all ANSI escape sequences from a string.
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
 
 // TextGenerator produces text-based output suitable for terminal display.
 // It includes ANSI color codes for enhanced readability.
@@ -61,9 +82,6 @@ func (g *TextGenerator) printSummary(summary types.Summary) {
 	fmt.Fprintf(g.writer, "Unmatched CRs: %d - (CRs that were found in the cluster but do not match any RDS template)\n", len(summary.UnmatchedCRS))
 	fmt.Fprintln(g.writer)
 }
-
-// ColorOrange is the ANSI color code for orange text.
-const ColorOrange = "\033[38;5;208m"
 
 // printMissingCRs outputs the missing CRs section with impact evaluation.
 func (g *TextGenerator) printMissingCRs(issues types.ValidationIssues, diffs []types.Diff) {
@@ -188,10 +206,7 @@ func (g *TextGenerator) printDiffs(diffs []types.Diff) {
 	for _, d := range diffs {
 		// Handle empty diffs - add minimal DiffCheck for count rules only.
 		if d.DiffOutput == "" {
-			allDiffChecks = append(allDiffChecks, types.DiffCheck{
-				CRName:           d.CRName,
-				TemplateFileName: filepath.Base(d.CorrelatedTemplate),
-			})
+			allDiffChecks = append(allDiffChecks, minimalDiffCheck(d))
 			continue
 		}
 
@@ -266,11 +281,11 @@ func (g *TextGenerator) printCountRuleResults(results []rules.CountRuleResult, i
 		impactColor := getImpactColor(result.Impact)
 		impactSymbol := getImpactSymbol(result.Impact)
 
-		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", ColorBold, ColorReset)
 		fmt.Fprintf(g.writer, "Rule: %s\n", result.RuleID)
 		fmt.Fprintf(g.writer, "Description: %s\n", result.Description)
 		fmt.Fprintf(g.writer, "Count: %d CRs matched\n", result.Count)
-		fmt.Fprintf(g.writer, "Impact: %s%s %s%s\n", impactColor, impactSymbol, result.Impact, parser.ColorReset)
+		fmt.Fprintf(g.writer, "Impact: %s%s %s%s\n", impactColor, impactSymbol, result.Impact, ColorReset)
 		fmt.Fprintf(g.writer, "Comment: %s\n", result.Comment)
 
 		if len(result.MatchedCRs) > 0 {
@@ -279,7 +294,7 @@ func (g *TextGenerator) printCountRuleResults(results []rules.CountRuleResult, i
 				fmt.Fprintf(g.writer, "  - %s\n", cr)
 			}
 		}
-		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", ColorBold, ColorReset)
 		fmt.Fprintln(g.writer)
 
 		impactStats[result.Impact]++
@@ -314,7 +329,7 @@ func (g *TextGenerator) printExpectedNotFoundLines(diffCheck types.DiffCheck, ru
 		if len(ruleIDs) == 0 {
 			hasNeedsReview = true
 		}
-		fmt.Fprint(g.writer, parser.ColorGreen+line+parser.ColorReset)
+		fmt.Fprint(g.writer, ColorGreen+line+ColorReset)
 		g.printRuleIDsSuffix(ruleIDs)
 	}
 	return hasNeedsReview
@@ -333,7 +348,7 @@ func (g *TextGenerator) printFoundNotExpectedLines(diffCheck types.DiffCheck, ru
 		if len(ruleIDs) == 0 {
 			hasNeedsReview = true
 		}
-		fmt.Fprint(g.writer, parser.ColorRed+line+parser.ColorReset)
+		fmt.Fprint(g.writer, ColorRed+line+ColorReset)
 		g.printRuleIDsSuffix(ruleIDs)
 	}
 	return hasNeedsReview
@@ -360,7 +375,7 @@ func (g *TextGenerator) printContextualValueDifferences(diffCheck types.DiffChec
 	expectedTargets := diffCheck.ExpectedNotFound
 
 	fmt.Fprintln(g.writer, "expected:")
-	if needsReview := g.printContextualDiffViewWithRules(diffCheck.ExpectedWithContext, expectedTargets, parser.ColorGreen, ruleResult); needsReview {
+	if needsReview := g.printContextualDiffViewWithRules(diffCheck.ExpectedWithContext, expectedTargets, ColorGreen, ruleResult); needsReview {
 		hasNeedsReview = true
 	}
 
@@ -369,7 +384,7 @@ func (g *TextGenerator) printContextualValueDifferences(diffCheck types.DiffChec
 	foundTargets = append(foundTargets, diffCheck.FoundNotExpected...)
 
 	fmt.Fprintln(g.writer, "found:")
-	if needsReview := g.printContextualDiffViewWithRules(diffCheck.FoundWithContext, foundTargets, parser.ColorRed, ruleResult); needsReview {
+	if needsReview := g.printContextualDiffViewWithRules(diffCheck.FoundWithContext, foundTargets, ColorRed, ruleResult); needsReview {
 		hasNeedsReview = true
 	}
 
@@ -382,7 +397,7 @@ func (g *TextGenerator) printPlainValueDifferences(diffCheck types.DiffCheck, ru
 
 	fmt.Fprintln(g.writer, "expected:")
 	for _, line := range diffCheck.ExpectedValue {
-		fmt.Fprintln(g.writer, parser.ColorGreen+line+parser.ColorReset)
+		fmt.Fprintln(g.writer, ColorGreen+line+ColorReset)
 	}
 
 	fmt.Fprintln(g.writer, "found:")
@@ -391,7 +406,7 @@ func (g *TextGenerator) printPlainValueDifferences(diffCheck types.DiffCheck, ru
 		if len(ruleIDs) == 0 {
 			hasNeedsReview = true
 		}
-		fmt.Fprint(g.writer, parser.ColorRed+line+parser.ColorReset)
+		fmt.Fprint(g.writer, ColorRed+line+ColorReset)
 		g.printRuleIDsSuffix(ruleIDs)
 	}
 	return hasNeedsReview
@@ -402,9 +417,9 @@ func (g *TextGenerator) printPlainValueDifferences(diffCheck types.DiffCheck, ru
 func (g *TextGenerator) printContextualDiffViewColored(diffLines []types.DiffLine, changedColor string) {
 	for _, dl := range diffLines {
 		if dl.IsChanged {
-			fmt.Fprintln(g.writer, changedColor+dl.Content+parser.ColorReset)
+			fmt.Fprintln(g.writer, changedColor+dl.Content+ColorReset)
 		} else {
-			fmt.Fprintln(g.writer, parser.ColorDim+dl.Content+parser.ColorReset)
+			fmt.Fprintln(g.writer, ColorDim+dl.Content+ColorReset)
 		}
 	}
 }
@@ -429,14 +444,14 @@ func (g *TextGenerator) printContextualDiffViewWithRules(diffLines []types.DiffL
 			if len(ruleIDs) == 0 {
 				hasNeedsReview = true
 			}
-			fmt.Fprint(g.writer, changedColor+dl.Content+parser.ColorReset)
+			fmt.Fprint(g.writer, changedColor+dl.Content+ColorReset)
 			g.printRuleIDsSuffix(ruleIDs)
 		} else if dl.IsChanged {
 			// Changed line but not in target set - just print colored.
-			fmt.Fprintln(g.writer, changedColor+dl.Content+parser.ColorReset)
+			fmt.Fprintln(g.writer, changedColor+dl.Content+ColorReset)
 		} else {
 			// Context line - print dim.
-			fmt.Fprintln(g.writer, parser.ColorDim+dl.Content+parser.ColorReset)
+			fmt.Fprintln(g.writer, ColorDim+dl.Content+ColorReset)
 		}
 	}
 
@@ -459,6 +474,35 @@ func (g *TextGenerator) getMatchingRuleIDsAnyType(line string, ruleResult rules.
 		}
 	}
 
+	return ruleIDs
+}
+
+// minimalDiffCheck creates a DiffCheck with only identity fields, for empty diffs.
+func minimalDiffCheck(d types.Diff) types.DiffCheck {
+	return types.DiffCheck{
+		CRName:           d.CRName,
+		TemplateFileName: filepath.Base(d.CorrelatedTemplate),
+	}
+}
+
+// matchingRuleIDs returns rule IDs whose conditions matched a specific line.
+// This is the shared implementation used by all report generators.
+func matchingRuleIDs(line, diffType string, ruleResult rules.EvaluationResult) []string {
+	trimmedLine := strings.TrimSpace(line)
+	var ruleIDs []string
+	seen := make(map[string]bool)
+
+	for _, condResult := range ruleResult.Conditions {
+		if condResult.ConditionType == diffType && condResult.Matched {
+			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
+			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
+				if !seen[condResult.RuleID] {
+					seen[condResult.RuleID] = true
+					ruleIDs = append(ruleIDs, condResult.RuleID)
+				}
+			}
+		}
+	}
 	return ruleIDs
 }
 
@@ -501,36 +545,12 @@ func hasUnmatchedLines(diffCheck types.DiffCheck, ruleResult rules.EvaluationRes
 
 // lineHasMatchingRule checks if a line has at least one matching rule.
 func lineHasMatchingRule(line, diffType string, ruleResult rules.EvaluationResult) bool {
-	trimmedLine := strings.TrimSpace(line)
-	for _, condResult := range ruleResult.Conditions {
-		if condResult.ConditionType == diffType && condResult.Matched {
-			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
-			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
-				return true
-			}
-		}
-	}
-	return false
+	return len(matchingRuleIDs(line, diffType, ruleResult)) > 0
 }
 
 // getMatchingRuleIDs returns rule IDs that matched a specific line.
 func (g *TextGenerator) getMatchingRuleIDs(line, diffType string, ruleResult rules.EvaluationResult) []string {
-	trimmedLine := strings.TrimSpace(line)
-	var ruleIDs []string
-	seen := make(map[string]bool)
-
-	for _, condResult := range ruleResult.Conditions {
-		if condResult.ConditionType == diffType && condResult.Matched {
-			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
-			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
-				if !seen[condResult.RuleID] {
-					seen[condResult.RuleID] = true
-					ruleIDs = append(ruleIDs, condResult.RuleID)
-				}
-			}
-		}
-	}
-	return ruleIDs
+	return matchingRuleIDs(line, diffType, ruleResult)
 }
 
 // printRuleIDsSuffix outputs the rule IDs that matched a line.
@@ -544,14 +564,14 @@ func (g *TextGenerator) printRuleIDsSuffix(ruleIDs []string) {
 
 // printOverallRuleResult outputs the overall evaluation result.
 func (g *TextGenerator) printOverallRuleResult(ruleResult rules.EvaluationResult, hasNeedsReview bool) {
-	fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+	fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", ColorBold, ColorReset)
 
 	if !ruleResult.Matched {
-		fmt.Fprintf(g.writer, "%s OVERALL IMPACT: %sNeedsReview%s%s\n", parser.ColorBold, parser.ColorCyan, parser.ColorReset, parser.ColorBold+parser.ColorReset)
+		fmt.Fprintf(g.writer, "%s OVERALL IMPACT: %sNeedsReview%s%s\n", ColorBold, ColorCyan, ColorReset, ColorBold+ColorReset)
 		fmt.Fprintln(g.writer)
 		fmt.Fprintln(g.writer, "Rules:")
 		fmt.Fprintf(g.writer, "  - None: \u26AA %s\n", ruleResult.Comment)
-		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+		fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", ColorBold, ColorReset)
 		return
 	}
 
@@ -561,7 +581,7 @@ func (g *TextGenerator) printOverallRuleResult(ruleResult rules.EvaluationResult
 	}
 
 	impactColor := getImpactColor(finalImpact)
-	fmt.Fprintf(g.writer, "%s OVERALL IMPACT: %s%s%s%s\n", parser.ColorBold, impactColor, finalImpact, parser.ColorReset, parser.ColorBold+parser.ColorReset)
+	fmt.Fprintf(g.writer, "%s OVERALL IMPACT: %s%s%s%s\n", ColorBold, impactColor, finalImpact, ColorReset, ColorBold+ColorReset)
 	fmt.Fprintln(g.writer)
 	fmt.Fprintln(g.writer, "Rules:")
 
@@ -576,7 +596,7 @@ func (g *TextGenerator) printOverallRuleResult(ruleResult rules.EvaluationResult
 		fmt.Fprintf(g.writer, "  - \U0001F50D Some lines need review by the telco team\n")
 	}
 
-	fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", parser.ColorBold, parser.ColorReset)
+	fmt.Fprintf(g.writer, "%s═══════════════════════════════════════════════════%s\n", ColorBold, ColorReset)
 }
 
 // getImpactSymbol returns an emoji symbol for the impact level.
@@ -597,12 +617,12 @@ func getImpactSymbol(impact string) string {
 func getImpactColor(impact string) string {
 	switch impact {
 	case "Impacting":
-		return parser.ColorRed + parser.ColorBold
+		return ColorRed + ColorBold
 	case "NotImpacting":
-		return parser.ColorYellow
+		return ColorYellow
 	case "NotADeviation":
-		return parser.ColorGreen
+		return ColorGreen
 	default:
-		return parser.ColorCyan
+		return ColorCyan
 	}
 }

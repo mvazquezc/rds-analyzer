@@ -240,10 +240,7 @@ func (g *ReportingGenerator) evaluateAllDiffs(diffs []types.Diff) ([]reportingDi
 	for _, d := range diffs {
 		// Handle empty diffs - add minimal DiffCheck for count rules only.
 		if d.DiffOutput == "" {
-			allDiffChecks = append(allDiffChecks, types.DiffCheck{
-				CRName:           d.CRName,
-				TemplateFileName: filepath.Base(d.CorrelatedTemplate),
-			})
+			allDiffChecks = append(allDiffChecks, minimalDiffCheck(d))
 			continue
 		}
 
@@ -256,7 +253,7 @@ func (g *ReportingGenerator) evaluateAllDiffs(diffs []types.Diff) ([]reportingDi
 		allDiffChecks = append(allDiffChecks, diffCheck)
 
 		ruleResult := g.ruleEngine.Evaluate(diffCheck)
-		hasNeedsReview := g.hasUnmatchedLines(diffCheck, ruleResult)
+		hasNeedsReview := hasUnmatchedLines(diffCheck, ruleResult)
 		finalImpact := determineImpact(ruleResult, hasNeedsReview)
 
 		// Skip NotADeviation diffs for display purposes only.
@@ -280,44 +277,9 @@ func (g *ReportingGenerator) evaluateAllDiffs(diffs []types.Diff) ([]reportingDi
 	return results, allDiffChecks
 }
 
-// hasUnmatchedLines checks if any diff lines are not matched by rules.
-func (g *ReportingGenerator) hasUnmatchedLines(diffCheck types.DiffCheck, ruleResult rules.EvaluationResult) bool {
-	for _, line := range diffCheck.ExpectedNotFound {
-		if len(g.getMatchingRuleIDs(line, "ExpectedNotFound", ruleResult)) == 0 {
-			return true
-		}
-	}
-	for _, line := range diffCheck.FoundNotExpected {
-		if len(g.getMatchingRuleIDs(line, "FoundNotExpected", ruleResult)) == 0 {
-			return true
-		}
-	}
-	for _, line := range diffCheck.FoundValue {
-		if len(g.getMatchingRuleIDs(line, "ExpectedFound", ruleResult)) == 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // getMatchingRuleIDs returns rule IDs that matched a specific line.
 func (g *ReportingGenerator) getMatchingRuleIDs(line, diffType string, ruleResult rules.EvaluationResult) []string {
-	trimmedLine := strings.TrimSpace(line)
-	var ruleIDs []string
-	seen := make(map[string]bool)
-
-	for _, condResult := range ruleResult.Conditions {
-		if condResult.ConditionType == diffType && condResult.Matched {
-			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
-			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
-				if !seen[condResult.RuleID] {
-					seen[condResult.RuleID] = true
-					ruleIDs = append(ruleIDs, condResult.RuleID)
-				}
-			}
-		}
-	}
-	return ruleIDs
+	return matchingRuleIDs(line, diffType, ruleResult)
 }
 
 // extractImpactingRules returns only the rules with Impacting impact.
@@ -360,39 +322,27 @@ func (g *ReportingGenerator) extractUnresolvedLines(diffCheck types.DiffCheck, r
 
 	for _, line := range diffCheck.ExpectedNotFound {
 		if len(g.getMatchingRuleIDs(line, "ExpectedNotFound", ruleResult)) == 0 {
-			unresolved.expectedNotFound = append(unresolved.expectedNotFound, g.stripANSI(line))
+			unresolved.expectedNotFound = append(unresolved.expectedNotFound, stripANSI(line))
 		}
 	}
 
 	for _, line := range diffCheck.FoundNotExpected {
 		if len(g.getMatchingRuleIDs(line, "FoundNotExpected", ruleResult)) == 0 {
-			unresolved.foundNotExpected = append(unresolved.foundNotExpected, g.stripANSI(line))
+			unresolved.foundNotExpected = append(unresolved.foundNotExpected, stripANSI(line))
 		}
 	}
 
 	// For ExpectedFound (value differences), include both expected and found if unmatched.
 	for i, line := range diffCheck.FoundValue {
 		if len(g.getMatchingRuleIDs(line, "ExpectedFound", ruleResult)) == 0 {
-			unresolved.foundValue = append(unresolved.foundValue, g.stripANSI(line))
+			unresolved.foundValue = append(unresolved.foundValue, stripANSI(line))
 			if i < len(diffCheck.ExpectedValue) {
-				unresolved.expectedValue = append(unresolved.expectedValue, g.stripANSI(diffCheck.ExpectedValue[i]))
+				unresolved.expectedValue = append(unresolved.expectedValue, stripANSI(diffCheck.ExpectedValue[i]))
 			}
 		}
 	}
 
 	return unresolved
-}
-
-// stripANSI removes ANSI color codes from a string.
-func (g *ReportingGenerator) stripANSI(s string) string {
-	s = strings.ReplaceAll(s, parser.ColorReset, "")
-	s = strings.ReplaceAll(s, parser.ColorRed, "")
-	s = strings.ReplaceAll(s, parser.ColorGreen, "")
-	s = strings.ReplaceAll(s, parser.ColorYellow, "")
-	s = strings.ReplaceAll(s, parser.ColorBlue, "")
-	s = strings.ReplaceAll(s, parser.ColorCyan, "")
-	s = strings.ReplaceAll(s, parser.ColorBold, "")
-	return s
 }
 
 // printIndentedLines prints lines preserving their relative YAML indentation.
@@ -478,15 +428,6 @@ func (g *ReportingGenerator) printContextualDiffView(diffLines []types.DiffLine,
 
 		fmt.Fprintf(g.writer, "%s%s%s%s\n", baseIndent, gutter, strings.Repeat(" ", relativeIndent), trimmed)
 	}
-}
-
-// extractDiffChecks extracts DiffCheck objects from results.
-func (g *ReportingGenerator) extractDiffChecks(results []reportingDiffResult) []types.DiffCheck {
-	checks := make([]types.DiffCheck, len(results))
-	for i, r := range results {
-		checks[i] = r.diffCheck
-	}
-	return checks
 }
 
 // hasImpactingMissingCRs checks if there are any impacting missing CRs.

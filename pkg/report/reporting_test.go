@@ -393,8 +393,6 @@ func TestReportingGenerator_TemplateSeparator(t *testing.T) {
 }
 
 func TestReportingGenerator_StripANSI(t *testing.T) {
-	generator := &ReportingGenerator{}
-
 	tests := []struct {
 		input    string
 		expected string
@@ -406,7 +404,7 @@ func TestReportingGenerator_StripANSI(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := generator.stripANSI(tt.input)
+		result := stripANSI(tt.input)
 		if result != tt.expected {
 			t.Errorf("stripANSI(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
@@ -557,95 +555,6 @@ func TestReportingGenerator_PrintCountRuleViolations_Empty(t *testing.T) {
 	// Should be empty when no violations
 	if output != "" {
 		t.Errorf("expected empty output for no violations, got: %q", output)
-	}
-}
-
-func TestReportingGenerator_ExtractDiffChecks(t *testing.T) {
-	rulesFile := createTestRulesFile(t)
-	engine, err := rules.NewEngine(rulesFile)
-	if err != nil {
-		t.Fatalf("Failed to create engine: %v", err)
-	}
-
-	generator := NewReportingGenerator(engine)
-
-	// Create test data with reportingDiffResult
-	results := []reportingDiffResult{
-		{
-			diffCheck: types.DiffCheck{
-				CRName:           "v1_ConfigMap_ns1_config1",
-				TemplateFileName: "Config1.yaml",
-				ExpectedNotFound: []string{"key1: value1"},
-			},
-			finalImpact: "Impacting",
-		},
-		{
-			diffCheck: types.DiffCheck{
-				CRName:           "v1_ConfigMap_ns2_config2",
-				TemplateFileName: "Config2.yaml",
-				FoundNotExpected: []string{"extra: field"},
-			},
-			finalImpact: "NotImpacting",
-		},
-		{
-			diffCheck: types.DiffCheck{
-				CRName:           "v1_Secret_ns3_secret1",
-				TemplateFileName: "Secret1.yaml",
-				ExpectedValue:    []string{"password: old"},
-				FoundValue:       []string{"password: new"},
-			},
-			finalImpact: "NeedsReview",
-		},
-	}
-
-	checks := generator.extractDiffChecks(results)
-
-	// Verify correct number of checks extracted
-	if len(checks) != 3 {
-		t.Fatalf("expected 3 checks, got %d", len(checks))
-	}
-
-	// Verify first check
-	if checks[0].CRName != "v1_ConfigMap_ns1_config1" {
-		t.Errorf("check[0].CRName = %q, want %q", checks[0].CRName, "v1_ConfigMap_ns1_config1")
-	}
-	if checks[0].TemplateFileName != "Config1.yaml" {
-		t.Errorf("check[0].TemplateFileName = %q, want %q", checks[0].TemplateFileName, "Config1.yaml")
-	}
-	if len(checks[0].ExpectedNotFound) != 1 {
-		t.Errorf("check[0].ExpectedNotFound length = %d, want 1", len(checks[0].ExpectedNotFound))
-	}
-
-	// Verify second check
-	if checks[1].CRName != "v1_ConfigMap_ns2_config2" {
-		t.Errorf("check[1].CRName = %q, want %q", checks[1].CRName, "v1_ConfigMap_ns2_config2")
-	}
-	if len(checks[1].FoundNotExpected) != 1 {
-		t.Errorf("check[1].FoundNotExpected length = %d, want 1", len(checks[1].FoundNotExpected))
-	}
-
-	// Verify third check
-	if checks[2].CRName != "v1_Secret_ns3_secret1" {
-		t.Errorf("check[2].CRName = %q, want %q", checks[2].CRName, "v1_Secret_ns3_secret1")
-	}
-	if len(checks[2].ExpectedValue) != 1 || len(checks[2].FoundValue) != 1 {
-		t.Errorf("check[2] should have 1 ExpectedValue and 1 FoundValue")
-	}
-}
-
-func TestReportingGenerator_ExtractDiffChecks_Empty(t *testing.T) {
-	rulesFile := createTestRulesFile(t)
-	engine, err := rules.NewEngine(rulesFile)
-	if err != nil {
-		t.Fatalf("Failed to create engine: %v", err)
-	}
-
-	generator := NewReportingGenerator(engine)
-
-	checks := generator.extractDiffChecks([]reportingDiffResult{})
-
-	if len(checks) != 0 {
-		t.Errorf("expected 0 checks for empty input, got %d", len(checks))
 	}
 }
 

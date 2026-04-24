@@ -768,9 +768,10 @@ func TestCheckContains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched, _ := engine.checkContains(tt.searchText, tt.lines)
+			matches := engine.checkContainsAll(tt.searchText, tt.lines)
+			matched := len(matches) > 0
 			if matched != tt.wantMatch {
-				t.Errorf("checkContains() matched = %v, want %v", matched, tt.wantMatch)
+				t.Errorf("checkContainsAll() matched = %v, want %v", matched, tt.wantMatch)
 			}
 		})
 	}
@@ -836,9 +837,10 @@ func TestCheckRegex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched, _ := engine.checkRegex(tt.pattern, tt.lines)
+			matches := engine.checkRegexAll(tt.pattern, tt.lines)
+			matched := len(matches) > 0
 			if matched != tt.wantMatch {
-				t.Errorf("checkRegex() matched = %v, want %v", matched, tt.wantMatch)
+				t.Errorf("checkRegexAll() matched = %v, want %v", matched, tt.wantMatch)
 			}
 		})
 	}
@@ -1851,9 +1853,10 @@ func TestCheckMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched, _ := engine.checkMatch(tt.condition, tt.lines)
+			matches := engine.checkMatchAll(tt.condition, tt.lines)
+			matched := len(matches) > 0
 			if matched != tt.wantMatch {
-				t.Errorf("checkMatch() = %v, want %v", matched, tt.wantMatch)
+				t.Errorf("checkMatchAll() = %v, want %v", matched, tt.wantMatch)
 			}
 		})
 	}

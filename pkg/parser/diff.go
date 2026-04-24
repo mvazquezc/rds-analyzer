@@ -8,18 +8,6 @@ import (
 	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
 
-// ANSI color codes for terminal output formatting.
-const (
-	ColorReset  = "\033[0m"
-	ColorRed    = "\033[31m"
-	ColorGreen  = "\033[32m"
-	ColorYellow = "\033[33m"
-	ColorBlue   = "\033[34m"
-	ColorCyan   = "\033[36m"
-	ColorBold   = "\033[1m"
-	ColorDim    = "\033[2m"
-)
-
 // diffLineInfo holds parsed line info during diff processing.
 type diffLineInfo struct {
 	content  string // Line content without diff marker
