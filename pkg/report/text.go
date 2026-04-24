@@ -495,6 +495,9 @@ func matchingRuleIDs(line, diffType string, ruleResult rules.EvaluationResult) [
 	for _, condResult := range ruleResult.Conditions {
 		if condResult.ConditionType == diffType && condResult.Matched {
 			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
+			if trimmedMatched == "" {
+				continue
+			}
 			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
 				if !seen[condResult.RuleID] {
 					seen[condResult.RuleID] = true

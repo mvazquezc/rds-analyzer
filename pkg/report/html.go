@@ -442,30 +442,28 @@ func (g *HTMLGenerator) processDiffs(diffs []types.Diff, stats *ImpactStats) ([]
 }
 
 func getMatchingRulesHTML(line, diffType string, ruleResult rules.EvaluationResult) []RuleTagData {
-	ids := matchingRuleIDs(line, diffType, ruleResult)
-	if len(ids) == 0 {
-		return nil
-	}
+	trimmedLine := strings.TrimSpace(line)
+	var ruleTags []RuleTagData
+	seen := make(map[string]bool)
 
-	// Build a lookup from rule ID to condition details.
-	condByID := make(map[string]rules.ConditionResult)
 	for _, condResult := range ruleResult.Conditions {
-		if condResult.Matched {
-			if _, exists := condByID[condResult.RuleID]; !exists {
-				condByID[condResult.RuleID] = condResult
+		if condResult.ConditionType == diffType && condResult.Matched {
+			trimmedMatched := strings.TrimSpace(condResult.MatchedText)
+			if trimmedMatched == "" {
+				continue
+			}
+			if strings.Contains(trimmedLine, trimmedMatched) || strings.Contains(trimmedMatched, trimmedLine) {
+				if !seen[condResult.RuleID] {
+					seen[condResult.RuleID] = true
+					ruleTags = append(ruleTags, RuleTagData{
+						ID:        condResult.RuleID,
+						Comment:   condResult.Comment,
+						Impact:    condResult.Impact,
+						ImpactCSS: getImpactCSS(condResult.Impact),
+					})
+				}
 			}
 		}
-	}
-
-	var ruleTags []RuleTagData
-	for _, id := range ids {
-		cond := condByID[id]
-		ruleTags = append(ruleTags, RuleTagData{
-			ID:        id,
-			Comment:   cond.Comment,
-			Impact:    cond.Impact,
-			ImpactCSS: getImpactCSS(cond.Impact),
-		})
 	}
 	return ruleTags
 }
