@@ -983,3 +983,20 @@ Before submitting new rules:
 - [ ] `supporting_doc` is included when relevant documentation exists
 - [ ] Rules are tested with real or realistic diff data
 - [ ] No duplicate rules (check existing rules first)
+
+## Conscious Design Choices
+
+This section documents intentional design decisions that may be flagged by linters or code review tools. These are not defects -- they are deliberate choices with documented rationale.
+
+### Ignoring `fmt.Fprint*` Errors in Report Generators
+
+The text and reporting generators (`pkg/report/text.go`, `pkg/report/reporting.go`) call `fmt.Fprint`, `fmt.Fprintf`, and `fmt.Fprintln` without checking their return values. This is intentional.
+
+**Why this is acceptable:**
+
+- Ignoring `fmt.Fprint*` return values when writing CLI output to an `io.Writer` is idiomatic Go. The standard library tools (`go test`, `go vet`, `go fmt`) follow this same pattern, and neither `go vet` nor `golangci-lint` flag it.
+- There are ~90 such calls in `text.go` and ~67 in `reporting.go`. Wrapping all of them with error-capturing wrappers (`writeErr` field, short-circuit checks, `g.write`/`g.writef`/`g.writeln` methods) would add significant structural complexity to what are currently clean, readable print functions.
+- In the CLI context, a write failure to stdout causes `SIGPIPE`, terminating the process. A returned error would never reach a caller that could act on it.
+- The HTML generator uses `template.Execute` which handles write errors internally, but that is a fundamentally different pattern (single write call vs. many imperative prints). Comparing them is not meaningful.
+
+**When to revisit:** If a future use case requires writing reports over a network connection or other unreliable transport where partial failure must be detected and handled, this decision can be revisited with a clear justification for the added complexity.
