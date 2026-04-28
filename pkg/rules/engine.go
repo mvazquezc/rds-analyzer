@@ -90,33 +90,44 @@ func NewEngineFromBytes(data []byte, version string) (*Engine, error) {
 	return engine, nil
 }
 
+// highestVersionFromImpacts returns the highest OCP version from a slice of versioned impacts,
+// or current if none are higher.
+func highestVersionFromImpacts(impacts []VersionedImpact, current OCPVersion) OCPVersion {
+	for _, imp := range impacts {
+		if v := imp.GetHighestDefinedVersion(); v.Compare(current) > 0 {
+			current = v
+		}
+	}
+	return current
+}
+
 // findHighestDefinedVersion scans all rules and returns the highest OCP version
 // defined in any versioned impact.
 func (e *Engine) findHighestDefinedVersion() OCPVersion {
 	var highest OCPVersion
 
 	for _, rule := range e.config.GlobalRules {
-		for _, cond := range rule.Conditions {
-			if v := cond.Impact.GetHighestDefinedVersion(); v.Compare(highest) > 0 {
-				highest = v
-			}
+		impacts := make([]VersionedImpact, len(rule.Conditions))
+		for i, cond := range rule.Conditions {
+			impacts[i] = cond.Impact
 		}
+		highest = highestVersionFromImpacts(impacts, highest)
 	}
 
 	for _, rule := range e.config.Rules {
-		for _, cond := range rule.Conditions {
-			if v := cond.Impact.GetHighestDefinedVersion(); v.Compare(highest) > 0 {
-				highest = v
-			}
+		impacts := make([]VersionedImpact, len(rule.Conditions))
+		for i, cond := range rule.Conditions {
+			impacts[i] = cond.Impact
 		}
+		highest = highestVersionFromImpacts(impacts, highest)
 	}
 
 	for _, rule := range e.config.CountRules {
-		for _, limit := range rule.Limits {
-			if v := limit.Impact.GetHighestDefinedVersion(); v.Compare(highest) > 0 {
-				highest = v
-			}
+		impacts := make([]VersionedImpact, len(rule.Limits))
+		for i, limit := range rule.Limits {
+			impacts[i] = limit.Impact
 		}
+		highest = highestVersionFromImpacts(impacts, highest)
 	}
 
 	return highest
@@ -264,12 +275,12 @@ func (e *Engine) extractAndEvaluateLabelAnnotationsWithContext(contextLines []ty
 		lineIndent := getIndentLevel(line)
 
 		// Check for section headers in ALL lines (context and changed).
-		if sectionType := e.detectSectionHeader(trimmed); sectionType != "" {
+		if sectionType := detectSectionHeader(trimmed); sectionType != "" {
 			currentType = sectionType
 			sectionIndent = lineIndent
 			// Only create a result for section headers that are in targetLines.
 			if targetSet[trimmed] {
-				results = append(results, e.createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
+				results = append(results, createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
 			}
 			continue
 		}
@@ -313,10 +324,10 @@ func (e *Engine) extractAndEvaluateLabelAnnotations(lines []string, conditionTyp
 		trimmed := strings.TrimSpace(line)
 		lineIndent := getIndentLevel(line)
 
-		if sectionType := e.detectSectionHeader(trimmed); sectionType != "" {
+		if sectionType := detectSectionHeader(trimmed); sectionType != "" {
 			currentType = sectionType
 			sectionIndent = lineIndent
-			results = append(results, e.createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
+			results = append(results, createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed))
 			continue
 		}
 
@@ -366,7 +377,7 @@ func (e *Engine) getLabelAnnotationDefaults() (string, string) {
 }
 
 // detectSectionHeader detects if a line is a section header and returns its type.
-func (e *Engine) detectSectionHeader(trimmed string) string {
+func detectSectionHeader(trimmed string) string {
 	if trimmed == "labels:" {
 		return "label"
 	}
@@ -377,7 +388,7 @@ func (e *Engine) detectSectionHeader(trimmed string) string {
 }
 
 // createSectionHeaderResult creates a condition result for a section header.
-func (e *Engine) createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed string) ConditionResult {
+func createSectionHeaderResult(conditionType, defaultImpact, defaultComment, trimmed string) ConditionResult {
 	return ConditionResult{
 		RuleID:        "label-annotation-rules",
 		ConditionType: conditionType,
@@ -514,12 +525,7 @@ func (e *Engine) deduplicateConditions(conditions []ConditionResult) []Condition
 
 // hasMatchedConditions checks if any conditions in the result matched.
 func (e *Engine) hasMatchedConditions(result EvaluationResult) bool {
-	for _, cond := range result.Conditions {
-		if cond.Matched {
-			return true
-		}
-	}
-	return false
+	return e.hasAnyMatchedCondition(result.Conditions)
 }
 
 // matchesRule checks if a rule applies to the given diff.
@@ -544,22 +550,28 @@ func (e *Engine) matchesRule(rule Rule, diffCheck types.DiffCheck) bool {
 	return true
 }
 
-// matchesPattern checks if a value matches a pattern with glob wildcards (*).
-func (e *Engine) matchesPattern(pattern, value string) bool {
+// globToRegex converts a glob pattern (with * wildcards) to a regex pattern string.
+func globToRegex(pattern string) string {
+	regexPattern := regexp.QuoteMeta(pattern)
+	regexPattern = strings.ReplaceAll(regexPattern, `\*`, `.*`)
+	return "^" + regexPattern + "$"
+}
+
+// matchesGlob checks if a value matches a glob pattern with * wildcards.
+func matchesGlob(pattern, value string) bool {
 	if !strings.Contains(pattern, "*") {
 		return pattern == value
 	}
-
-	// Convert glob to regex.
-	regexPattern := regexp.QuoteMeta(pattern)
-	regexPattern = strings.ReplaceAll(regexPattern, `\*`, `.*`)
-	regexPattern = "^" + regexPattern + "$"
-
-	re, err := regexp.Compile(regexPattern)
+	re, err := regexp.Compile(globToRegex(pattern))
 	if err != nil {
 		return false
 	}
 	return re.MatchString(value)
+}
+
+// matchesPattern checks if a value matches a pattern with glob wildcards (*).
+func (e *Engine) matchesPattern(pattern, value string) bool {
+	return matchesGlob(pattern, value)
 }
 
 // evaluateRule evaluates all conditions in a rule against a diff.
@@ -665,20 +677,6 @@ func (e *Engine) checkAnyCondition(base ConditionResult, condition Condition, di
 	return results
 }
 
-// checkMatch checks if a condition matches using regex or contains.
-func (e *Engine) checkMatch(condition Condition, lines []string) (bool, string) {
-	// Regex takes precedence.
-	if condition.Regex != "" {
-		return e.checkRegex(condition.Regex, lines)
-	}
-
-	if condition.Contains != "" {
-		return e.checkContains(condition.Contains, lines)
-	}
-
-	return false, ""
-}
-
 // checkMatchAll returns all matching lines for a condition.
 func (e *Engine) checkMatchAll(condition Condition, lines []string) []string {
 	// Regex takes precedence.
@@ -691,15 +689,6 @@ func (e *Engine) checkMatchAll(condition Condition, lines []string) []string {
 	}
 
 	return nil
-}
-
-// checkContains checks if the search text is in any of the lines.
-func (e *Engine) checkContains(searchText string, lines []string) (bool, string) {
-	matches := e.checkContainsAll(searchText, lines)
-	if len(matches) > 0 {
-		return true, matches[0]
-	}
-	return false, ""
 }
 
 // checkContainsAll returns all lines containing the search text.
@@ -734,15 +723,6 @@ func (e *Engine) checkContainsAll(searchText string, lines []string) []string {
 	}
 
 	return matches
-}
-
-// checkRegex checks if any line matches the given regular expression.
-func (e *Engine) checkRegex(pattern string, lines []string) (bool, string) {
-	matches := e.checkRegexAll(pattern, lines)
-	if len(matches) > 0 {
-		return true, matches[0]
-	}
-	return false, ""
 }
 
 // checkRegexAll returns all lines matching the given regular expression.
@@ -795,16 +775,17 @@ func (e *Engine) containsMultilinePattern(textLines, patternLines []string) bool
 	return false
 }
 
+// impactPriority maps impact levels to their priority (higher = worse).
+var impactPriority = map[string]int{
+	"Impacting":     4,
+	"NeedsReview":   3,
+	"NotImpacting":  2,
+	"NotADeviation": 1,
+}
+
 // isWorse returns true if impact1 is more critical than impact2.
 func (e *Engine) isWorse(impact1, impact2 string) bool {
-	priority := map[string]int{
-		"Impacting":     4,
-		"NeedsReview":   3,
-		"NotImpacting":  2,
-		"NotADeviation": 1,
-	}
-
-	return priority[impact1] > priority[impact2]
+	return impactPriority[impact1] > impactPriority[impact2]
 }
 
 // GetRules returns all loaded specific rules.
@@ -1056,24 +1037,14 @@ func pathKey(path string) string {
 // It finds the most specific matching rule and returns its impact and description.
 // If no rule matches, it returns the default impact and comment.
 func (e *Engine) EvaluateLabelOrAnnotation(key, value, laType string) LabelAnnotationResult {
-	rules := e.config.LabelAnnotationRules
-
-	// Default values if not configured
-	defaultImpact := rules.DefaultImpact
-	if defaultImpact == "" {
-		defaultImpact = "NotADeviation"
-	}
-	defaultComment := rules.DefaultComment
-	if defaultComment == "" {
-		defaultComment = "Labels and annotations are acceptable"
-	}
+	defaultImpact, defaultComment := e.getLabelAnnotationDefaults()
 
 	// Select the appropriate rule list based on type
 	var ruleList []LabelAnnotationRule
 	if laType == "label" {
-		ruleList = rules.Labels
+		ruleList = e.config.LabelAnnotationRules.Labels
 	} else if laType == "annotation" {
-		ruleList = rules.Annotations
+		ruleList = e.config.LabelAnnotationRules.Annotations
 	}
 
 	// Find all matching rules and track the most specific one
@@ -1190,25 +1161,7 @@ func (e *Engine) calculateRuleSpecificity(rule *LabelAnnotationRule, key, value 
 // matchesLabelAnnotationPattern checks if a key matches a pattern.
 // Supports exact match and glob-style wildcards (*).
 func (e *Engine) matchesLabelAnnotationPattern(pattern, key string) bool {
-	// Exact match
-	if pattern == key {
-		return true
-	}
-
-	// Glob pattern matching
-	if strings.Contains(pattern, "*") {
-		regexPattern := regexp.QuoteMeta(pattern)
-		regexPattern = strings.ReplaceAll(regexPattern, `\*`, `.*`)
-		regexPattern = "^" + regexPattern + "$"
-
-		re, err := regexp.Compile(regexPattern)
-		if err != nil {
-			return false
-		}
-		return re.MatchString(key)
-	}
-
-	return false
+	return matchesGlob(pattern, key)
 }
 
 // matchesLabelAnnotationRegex checks if a value matches a regular expression pattern.

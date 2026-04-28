@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openshift-kni/rds-analyzer/pkg/parser"
 	"github.com/openshift-kni/rds-analyzer/pkg/rules"
 	"github.com/openshift-kni/rds-analyzer/pkg/types"
 )
@@ -115,13 +114,13 @@ func TestTextGenerator_ContextualDiffView(t *testing.T) {
 	}
 
 	// Verify changed lines appear with colors.
-	if !strings.Contains(output, parser.ColorGreen) {
+	if !strings.Contains(output, ColorGreen) {
 		t.Error("Missing green color for expected lines")
 	}
-	if !strings.Contains(output, parser.ColorRed) {
+	if !strings.Contains(output, ColorRed) {
 		t.Error("Missing red color for found lines")
 	}
-	if !strings.Contains(output, parser.ColorDim) {
+	if !strings.Contains(output, ColorDim) {
 		t.Error("Missing dim color for context lines")
 	}
 }
@@ -143,20 +142,20 @@ func TestTextGenerator_printContextualDiffViewColored(t *testing.T) {
 
 	var buf bytes.Buffer
 	generator.writer = &buf
-	generator.printContextualDiffViewColored(diffLines, parser.ColorGreen)
+	generator.printContextualDiffViewColored(diffLines, ColorGreen)
 
 	output := buf.String()
 
 	// Verify context lines are dim.
-	if !strings.Contains(output, parser.ColorDim+"  context1"+parser.ColorReset) {
+	if !strings.Contains(output, ColorDim+"  context1"+ColorReset) {
 		t.Error("Context line 1 not properly formatted with dim color")
 	}
-	if !strings.Contains(output, parser.ColorDim+"  context2"+parser.ColorReset) {
+	if !strings.Contains(output, ColorDim+"  context2"+ColorReset) {
 		t.Error("Context line 2 not properly formatted with dim color")
 	}
 
 	// Verify changed line has the specified color.
-	if !strings.Contains(output, parser.ColorGreen+"  changed_line"+parser.ColorReset) {
+	if !strings.Contains(output, ColorGreen+"  changed_line"+ColorReset) {
 		t.Error("Changed line not properly formatted with green color")
 	}
 }
@@ -188,11 +187,11 @@ func TestGetImpactColor(t *testing.T) {
 		impact   string
 		expected string
 	}{
-		{"Impacting", parser.ColorRed + parser.ColorBold},
-		{"NotImpacting", parser.ColorYellow},
-		{"NotADeviation", parser.ColorGreen},
-		{"NeedsReview", parser.ColorCyan},
-		{"Unknown", parser.ColorCyan},
+		{"Impacting", ColorRed + ColorBold},
+		{"NotImpacting", ColorYellow},
+		{"NotADeviation", ColorGreen},
+		{"NeedsReview", ColorCyan},
+		{"Unknown", ColorCyan},
 	}
 
 	for _, tt := range tests {

@@ -51,11 +51,14 @@ func NewFromBytes(rulesData []byte, version string) (*Analyzer, error) {
 // The format parameter determines output type: "text" or "html".
 // The mode parameter determines output mode: "simple" or "reporting".
 func (a *Analyzer) Analyze(w io.Writer, validationReport types.ValidationReport, format, mode string) error {
-	if mode == "reporting" {
+	switch mode {
+	case "reporting":
 		return a.generateReportingOutput(w, validationReport)
+	case "simple":
+		return a.generateFormattedOutput(w, validationReport, format)
+	default:
+		return fmt.Errorf("unsupported output mode: %s (valid: simple, reporting)", mode)
 	}
-
-	return a.generateFormattedOutput(w, validationReport, format)
 }
 
 // generateReportingOutput generates output in reporting mode.

@@ -270,7 +270,7 @@ func TestEscapeHTML(t *testing.T) {
 		{
 			name:     "multiple special characters",
 			input:    "<script>alert('xss')</script>",
-			expected: "&lt;script&gt;alert('xss')&lt;/script&gt;",
+			expected: "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;",
 		},
 		{
 			name:     "yaml content",
